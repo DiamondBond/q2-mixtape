@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Mixtape's desktop indexer: hears every song on a Q2's card the way the Q2 does, many at once,
-and writes the profiles the Q2's Mixtape reads (.mixtape/profiles on the card). The Q2 then hears
-only the songs added or changed since.
+"""Mixtape's desktop indexer: hears the songs on a Q2's card as the Q2 does, many at once, and
+writes the profiles the Q2's Mixtape reads (.mixtape/profiles on the card). The Q2 then hears only
+the songs added or changed since. A CUE image's file is left out, as Mixtape leaves its tracks out.
 
     python3 mixtape_index.py /media/me/Q2CARD
 
@@ -33,13 +33,10 @@ AUDIO = {'.mp3', '.flac', '.wav', '.ape', '.m4a', '.aac', '.alac', '.ogg', '.oga
 NOT_MUSIC = ('audiobooks', 'podcasts')  # Q2 Pod's own folders, at the card's root
 
 
-def prof_key(rel, start=0, end=0):
-    """A song's key: FNV-1a 64 of its path from the card's root, a CUE track's "\\t<start>-<end>"
-    after it (src/lib.c prof_key)."""
+def prof_key(rel):
+    """A song's key: FNV-1a 64 of its path from the card's root (src/lib.c prof_key)."""
     h = 0xcbf29ce484222325
     data = rel.encode('utf-8', 'surrogateescape') if isinstance(rel, str) else rel
-    if start or end:
-        data += b'\t%d-%d' % (start, end)
     for b in data:
         h = ((h ^ b) * 0x100000001b3) & 0xffffffffffffffff
     return h
@@ -100,12 +97,10 @@ def probe(path):
     return int(m[1]) * 3600 + int(m[2]) * 60 + int(m[3]) if m else 0
 
 
-def analyse(path, start=0, length=0):
+def analyse(path):
     """(sec, status, features): 30 s from the middle, decoded to 22.05 kHz mono (src/scan.c)."""
-    if length <= 0:
-        whole = probe(path)
-        length = whole - start if whole > start else 0
-    at = start + ((length - CLIP_S) // 2 if length > CLIP_S else 0)
+    length = probe(path)
+    at = (length - CLIP_S) // 2 if length > CLIP_S else 0
     dur = length if 0 < length < CLIP_S else CLIP_S
     raw = subprocess.run(['ffmpeg', '-nostdin', '-v', 'quiet', '-ss', str(at), '-t', str(dur), '-i', path,
                           '-map', '0:a:0', '-ac', '1', '-ar', str(RATE), '-f', 's16le', '-'],
@@ -118,13 +113,16 @@ def analyse(path, start=0, length=0):
 
 def read_profiles(path):
     """{key: (size, record bytes)}, each key's last record, and how many records there are; {} for
-    a missing or foreign file (another version: every song is heard again)."""
+    a missing or foreign file (an older version: every song is heard again). A newer version's is
+    left as it is."""
     try:
         with open(path, 'rb') as f:
             data = f.read()
     except FileNotFoundError:
         return {}, 0
     if len(data) < HEAD.size or data[:HEAD.size] != HEAD.pack(MAGIC, VERSION, RECORD.size, 0):
+        if data[:4] == MAGIC and len(data) >= HEAD.size and HEAD.unpack_from(data)[1] > VERSION:
+            sys.exit('%s is from a newer Mixtape: update this indexer' % path)
         return {}, 0
     out, n = {}, (len(data) - HEAD.size) // RECORD.size
     for i in range(n):
@@ -134,16 +132,32 @@ def read_profiles(path):
     return out, n
 
 
+def cue_files(top, files):
+    """The names (lowercased, as FAT matches them) of the files the .cue sheets in top play."""
+    out = set()
+    for name in files:
+        if name.lower().endswith('.cue') and not name.startswith('.'):
+            try:
+                with open(os.path.join(top, name), 'rb') as f:
+                    sheet = f.read(1 << 20)
+            except OSError:
+                continue
+            for m in re.finditer(rb'^\s*FILE\s+(?:"([^"]+)"|(\S+))', sheet, re.M | re.I):
+                out.add(os.path.basename(os.fsdecode(m[1] or m[2]).replace('\\', '/')).lower())
+    return out
+
+
 def songs(card):
     """(path, path from the card's root) of every song: no dot folders or files, no audiobooks or
-    podcasts folder at the root, no .m4b (Q2 Pod's books)."""
+    podcasts folder at the root, no .m4b (Q2 Pod's books), no file a .cue sheet plays."""
     for top, dirs, files in os.walk(card):
         rel_top = os.path.relpath(top, card)
         dirs[:] = sorted(d for d in dirs if not d.startswith('.') and
                          not (rel_top == '.' and d.lower() in NOT_MUSIC))
+        cued = cue_files(top, files)
         for name in sorted(files):
             ext = os.path.splitext(name)[1].lower()
-            if name.startswith('.') or ext not in AUDIO:
+            if name.startswith('.') or ext not in AUDIO or name.lower() in cued:
                 continue
             full = os.path.join(top, name)
             rel = os.path.relpath(full, card).replace(os.sep, '/')

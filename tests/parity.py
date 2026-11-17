@@ -57,11 +57,9 @@ def main():
     os.makedirs(WORK)
     worst = 0
 
-    for path, cue in (('/mnt/mmc/Music/A/01 One.flac', 0), ('/mnt/mmc/Música/Ñu/02 Ünï.mp3', 0),
-                      ('/mnt/mmc/Live/Gig.flac', 300)):
-        key, _, _ = c('keys', path, str(cue), 'x', 'y')
-        rel = path[len('/mnt/mmc/'):]
-        assert int(key) == mi.prof_key(rel, cue, cue + 100 if cue else 0), path
+    for path in ('/mnt/mmc/Music/A/01 One.flac', '/mnt/mmc/Música/Ñu/02 Ünï.mp3'):
+        key, _, _ = c('keys', path, '0', 'x', 'y')
+        assert int(key) == mi.prof_key(path[len('/mnt/mmc/'):]), path
 
     for seed in range(3):  # features alone, from the same samples
         pcm = clip(30, seed)[::2, 0][:30 * 22050].copy()  # stand-in 22.05 kHz mono
@@ -79,13 +77,15 @@ def main():
     card = os.path.join(root, 'mnt', 'mmc')
     for rel, seconds, seed in (('Music/A/01 Long.wav', 75, 10), ('Music/A/02 Short.wav', 12, 11),
                                ('Music/B/Ünï.wav', 40, 12), ('podcasts/Ep.wav', 30, 13),
-                               ('.hidden/x.wav', 30, 14), ('Music/C/book.m4b', 0, 0)):
+                               ('.hidden/x.wav', 30, 14), ('Music/C/book.m4b', 0, 0),
+                               ('Music/D/Image.WAV', 30, 16), ('Music/D/image.cue', 0, 0)):
         path = os.path.join(card, rel)
         if seconds:
             write_wav(path, clip(seconds, seed))
         else:
             os.makedirs(os.path.dirname(path), exist_ok=True)
-            open(path, 'wb').write(b'not audio')
+            open(path, 'wb').write(b'not audio' if 'cue' not in rel else
+                                   b'REM x\r\nFILE "image.wav" WAVE\r\n  TRACK 01 AUDIO\r\n')
     for rel in ('Music/A/01 Long.wav', 'Music/A/02 Short.wav', 'Music/B/Ünï.wav'):  # the same file
         sec, status, f = mi.analyse(os.path.join(card, rel))
         got = c('analyse', os.path.join(card, rel))
@@ -114,6 +114,12 @@ def main():
     size = os.path.getsize(os.path.join(card, '.mixtape', 'profiles'))
     assert size == mi.HEAD.size + 4 * mi.RECORD.size, size
     assert c('lookup', root, 'Music/A/02 Short.wav')[:2] == ['3', '20']
+    profiles = os.path.join(card, '.mixtape', 'profiles')  # a newer Mixtape's file: left as it is
+    newer = mi.HEAD.pack(mi.MAGIC, mi.VERSION + 1, mi.RECORD.size, 0) + open(profiles, 'rb').read()[mi.HEAD.size:]
+    open(profiles, 'wb').write(newer)
+    run = subprocess.run([sys.executable, '-I', os.path.join(HERE, '..', 'desktop', 'mixtape_index.py'), card],
+                         capture_output=True, text=True)
+    assert run.returncode and 'newer Mixtape' in run.stderr and open(profiles, 'rb').read() == newer, run
     print('parity: keys equal; features within %.1e of C (tolerance %.0e); indexer file read by C' % (worst, TOL))
 
 
