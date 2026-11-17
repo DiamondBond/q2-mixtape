@@ -1,0 +1,32 @@
+#!/bin/sh
+# Installed as /mnt/mmc/.mixtape/run. Q2 Pod runs it when Mixtape's page opens (a card app,
+# q2-pod's patch/addon.c). It runs from /tmp, never the card: the app and this launcher are copied
+# there first and the card's copy of this script is left at once (exec), so nothing keeps the card
+# busy and USB storage can always take it. The app runs at nice 10 and its listening at 19, since
+# playback comes first. The loop restarts it after a failure, waiting 5 s and doubling to a minute;
+# an exit of 0 ends it. Q2 Pod stops it with a TERM to the loop's pid in /tmp/q2-mixtape.
+pid=/tmp/q2-mixtape
+if [ "$1" != --loop ]; then
+    [ -f $pid ] && kill -0 "$(cat $pid)" 2>/dev/null && exit 0
+    dir=$(cd "$(dirname "$0")" && pwd)
+    cp -f "$dir/q2-mixtape" /tmp/q2-mixtape.bin && chmod 755 /tmp/q2-mixtape.bin || exit 1
+    cp -f "$0" /tmp/q2-mixtape.run || exit 1
+    cd /tmp
+    exec /bin/sh /tmp/q2-mixtape.run --loop
+fi
+(
+    child=
+    trap '[ -n "$child" ] && kill -TERM $child 2>/dev/null && wait $child; rm -f $pid /tmp/q2-mixtape.bin /tmp/q2-mixtape.run; exit 0' TERM INT
+    delay=5
+    while :; do
+        nice -n 10 /tmp/q2-mixtape.bin &
+        child=$!
+        wait $child
+        code=$?
+        [ $code = 0 ] && break
+        sleep $delay
+        [ $delay -lt 60 ] && delay=$((delay * 2))
+    done
+    rm -f $pid /tmp/q2-mixtape.bin /tmp/q2-mixtape.run
+) </dev/null >/dev/null 2>&1 &
+echo $! > $pid
