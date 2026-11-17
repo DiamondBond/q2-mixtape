@@ -99,14 +99,16 @@ const char *R(const char *path);
 #define APP_DIR CARD "/.mixtape"
 #define PROF_FILE APP_DIR "/profiles"
 #define DB_FILE "/mnt/data/database.db"
-/* The Library's music, as Q2 Pod's MUSIC_WHERE: no podcasts, audiobooks or .m4b books. */
+/* The Library's music, as Q2 Pod's MUSIC_WHERE: no podcasts, audiobooks or .m4b books. And no
+ * CUE image's tracks (a start or an end set): a playlist's line names a file, so the image's first
+ * track would play instead. */
 #define MUSIC_SQL                                                                                  \
     "fileurl not like '/mnt/mmc/audiobooks/%' and fileurl not like '/mnt/mmc/podcasts/%' and "     \
-    "fileurl not like '%.m4b'"
+    "fileurl not like '%.m4b' and ifnull(time, 0) <= 0 and ifnull(time_end, 0) <= 0"
 
 /* lib.c */
 unsigned fnv32(unsigned h, const char *s);
-unsigned long long prof_key(const char *path, int start, int end);
+unsigned long long prof_key(const char *path);
 unsigned listen_key(const char *path, int cue);
 unsigned album_ident(const char *album, const char *album_artist, const char *path);
 unsigned norm_hash(const char *s, int title);
@@ -131,6 +133,9 @@ const char *lib_str(unsigned off);
 int song_text(void *db, unsigned id, char *path, unsigned np, char *title, unsigned nt,
               char *artist, unsigned na);
 long long file_stamp(const char *path);
+void dur_open(void);
+void dur_close(void);
+int dur_sec(const char *path);
 
 /* mix.c */
 unsigned rnd(unsigned n);
@@ -143,7 +148,7 @@ int mx_reroll(song_t *v, int n, int *list, int len, unsigned char *struck);
 
 /* scan.c */
 int scan_main(void);
-int analyse(const char *path, int start, int len, prof_t *p, short *pcm);
+int analyse(const char *path, int len, prof_t *p, short *pcm);
 
 /* net.c */
 typedef void (*json_cb)(void *ctx, int depth, char **keys, const char *value);

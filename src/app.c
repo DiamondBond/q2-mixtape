@@ -34,7 +34,9 @@
 #define REQ_MAX (8 << 10)
 #define ROWS 50
 #define FIND_ROWS 24 /* recommendations not on the card, listed after the mix */
-#define IDLE_S 600   /* the library let go after this long without a request */
+/* No request this long and nothing running: the app ends, so Smart Wi-Fi can let the radio
+ * sleep. The next page starts it again. */
+#define IDLE_S 600
 
 static volatile sig_atomic_t quit;
 static void on_term(int sig) {
@@ -176,6 +178,8 @@ static void scan_start(void) {
     unlink(R(SCAN_FILE));
     pid_t pid = fork();
     if (!pid) {
+        /* none of the app's: the page's connection would stay open until the scan ends */
+        for (int fd = 3; fd < 1024; ++fd) close(fd);
         execl("/proc/self/exe", "q2-mixtape", "scan", (char *)0);
         _exit(1);
     }
@@ -254,6 +258,8 @@ static void rows_fetch(void) {
         if (!song_text(db, s->id, mx.row[i].path, sizeof mx.row[i].path, mx.row[i].title,
                        sizeof mx.row[i].title, mx.row[i].artist, sizeof mx.row[i].artist))
             mx.row[i].path[0] = 0, snprintf(mx.row[i].title, sizeof mx.row[i].title, "Song gone");
+        else if (access(R(mx.row[i].path), 0))
+            mx.row[i].path[0] = 0; /* not on the card: shown, never queued */
         mx.row[i].sec = s->sec;
     }
     if (db) db_close(db);
@@ -376,7 +382,7 @@ static void mix_rows(rep_t *r) {
     for (int i = 0; i < mx.len; ++i)
         if (mx.struck[i])
             ++struck;
-        else
+        else if (mx.row[i].path[0])
             ++kept, total += mx.row[i].sec > 0 ? mx.row[i].sec : MX_GUESS_S;
     if (mx.len) {
         int k = mx.kind == MIX_SOUND ? snprintf(sub, sizeof sub, "%s%s \xc2\xb7 ",
@@ -393,6 +399,8 @@ static void mix_rows(rep_t *r) {
         time_text(t, mx.row[i].sec);
         if (mx.struck[i])
             snprintf(sub, sizeof sub, "Struck \xc2\xb7 Re-roll replaces it");
+        else if (!mx.row[i].path[0])
+            snprintf(sub, sizeof sub, "Not on the card");
         else
             snprintf(sub, sizeof sub, "%s%s%s", mx.row[i].artist,
                      *mx.row[i].artist && *t ? " \xc2\xb7 " : "", t);
@@ -449,9 +457,11 @@ static int queue_text(char **out) {
     if (!t) return -1;
     memcpy(t, "\xef\xbb\xbf", 3); /* UTF-8, as stock's playlist import reads it (no sniffing) */
     int songs = 0;
-    for (int i = 0; i < mx.len; ++i)
-        if (!mx.struck[i] && mx.row[i].path[0])
-            n += (size_t)sprintf(t + n, "%s\n", mx.row[i].path), ++songs;
+    for (int i = 0; i < mx.len; ++i) {
+        char *p = mx.row[i].path;
+        if (p[0] && access(R(p), 0)) p[0] = 0; /* gone since: Q2 Pod's queue would wait on it */
+        if (!mx.struck[i] && p[0]) n += (size_t)sprintf(t + n, "%s\n", p), ++songs;
+    }
     *out = t;
     return (int)n * !!songs;
 }
@@ -462,7 +472,7 @@ static void act_play(rep_t *r, const char *ctx) {
     if (n < 0)
         snprintf(r->msg, sizeof r->msg, n == -2 ? "This Mixtape has changed" : "Not enough memory");
     else if (!n)
-        snprintf(r->msg, sizeof r->msg, "Every song is struck");
+        snprintf(r->msg, sizeof r->msg, "Every song is struck or not on the card");
     else if (!has_cap("playlist"))
         snprintf(r->msg, sizeof r->msg, "Update Q2 Pod to play a Mixtape");
     else if (mkdir(R(APP_DIR), 0755), !put_file(R(QUEUE), t, (size_t)n))
@@ -525,8 +535,29 @@ static void playlist_name(char *out, unsigned size, char *file, unsigned fsize) 
     }
 }
 
+/* The adds of the request Q2 Pod hasn't answered yet into out: it takes a request only when
+ * none is running (and runs it once nothing plays), so a newer file would replace one it hasn't
+ * taken. An add it already ran only says "exists" again. */
+static size_t carried(char *out, size_t room) {
+    char done[32] = "", old[8192];
+    size_t n = 0, k;
+    FILE *f = fopen(R(LIBRARY ".done"), "rb");
+    if (f && fscanf(f, "%31s", done) != 1) done[0] = 0;
+    if (f) fclose(f);
+    f = fopen(R(LIBRARY), "rb");
+    k = f ? fread(old, 1, sizeof old - 1, f) : 0;
+    if (f) fclose(f);
+    old[k] = 0;
+    char *l = strchr(old, '\n'), *e;
+    if (!l || (*l = 0, !strcmp(old, done))) return 0; /* none, or answered */
+    for (++l; (e = strchr(l, '\n')); l = e + 1)
+        if (!strncmp(l, "add ", 4) && n + (size_t)(e - l) + 1 < room)
+            memcpy(out + n, l, (size_t)(e - l) + 1), n += (size_t)(e - l) + 1;
+    return n;
+}
+
 static void act_save(rep_t *r, const char *ctx) {
-    char *t = 0, name[100], file[200], line[256];
+    char *t = 0, name[100], file[200], line[8704];
     int n = ours(ctx) ? queue_text(&t) : -2;
     if (n < 0) {
         snprintf(r->msg, sizeof r->msg, n == -2 ? "This Mixtape has changed" : "Not enough memory");
@@ -535,7 +566,7 @@ static void act_save(rep_t *r, const char *ctx) {
     playlist_name(name, sizeof name, file, sizeof file);
     mkdir(R(PLAYLISTS), 0755);
     if (!n)
-        snprintf(r->msg, sizeof r->msg, "Every song is struck");
+        snprintf(r->msg, sizeof r->msg, "Every song is struck or not on the card");
     else if (!put_file(R(file), t, (size_t)n))
         snprintf(r->msg, sizeof r->msg, "Can't write to the card");
     else if (!has_cap("library"))
@@ -543,8 +574,10 @@ static void act_save(rep_t *r, const char *ctx) {
                  "Saved: Import Playlists adds \xe2\x80\x9c%.60s\xe2\x80\x9d", name);
     else {
         static unsigned seq;
-        int k = snprintf(line, sizeof line, "%lx%u\nadd %s\n", (unsigned long)time(0), ++seq, file);
-        if (put_file(R(LIBRARY), line, (size_t)k))
+        size_t k = (size_t)snprintf(line, sizeof line, "%lx%u\n", (unsigned long)time(0), ++seq);
+        k += carried(line + k, sizeof line - k - sizeof file - 8);
+        k += (size_t)snprintf(line + k, sizeof line - k, "add %s\n", file);
+        if (put_file(R(LIBRARY), line, k))
             snprintf(r->msg, sizeof r->msg,
                      "\xe2\x80\x9c%.60s\xe2\x80\x9d joins Playlists once nothing plays", name);
         else
@@ -643,10 +676,13 @@ static void page_scan(rep_t *r) {
     for (int i = 0; i < n; ++i) heard += lib.v[i].prof != 0;
     snprintf(sub, sizeof sub, "%s of %s", commas(heard, a), commas(n, b));
     info(r, "Songs heard", sub);
-    static const char *const ENDS[] = { 0, "Stopped: the card went away",
+    static const char *const ENDS[] = { 0,
+                                        "Stopped: the card went away",
                                         "Stopped: this Q2 has no ffmpeg",
-                                        "Stopped: the Library was updating", 0 };
-    if (ok && !strcmp(s.phase, "end") && s.left > 0 && s.left < 4 && ENDS[s.left])
+                                        "Stopped: the Library was updating",
+                                        0,
+                                        "Stopped: update Mixtape first" };
+    if (ok && !strcmp(s.phase, "end") && s.left > 0 && s.left < 6 && ENDS[s.left])
         info(r, ENDS[s.left], "");
     if (n)
         row(r, "action", "scanstart", heard < n ? "Listen Now" : "Listen for New Songs",
@@ -813,6 +849,10 @@ int serve(void) {
     if (s < 0 || bind(s, (struct sockaddr *)&addr, sizeof addr) || listen(s, 4)) return 1;
     hold(0);
     time_t last = time(0);
+    int idle = IDLE_S;
+#ifdef HOST /* the checks wait seconds, not minutes */
+    if (getenv("MIXTAPE_IDLE_S")) idle = atoi(getenv("MIXTAPE_IDLE_S"));
+#endif
     while (!quit) {
         struct pollfd p = { s, POLLIN, 0 };
         int k = poll(&p, 1, 1000);
@@ -821,9 +861,7 @@ int serve(void) {
             int fd = accept(s, 0, 0);
             if (fd >= 0) serve_one(fd), last = time(0);
         }
-        /* ponytail: the library (about 4 MB at 50,000 songs) is let go when idle, the app kept
-         * running for the next page; a re-roll after that crafts a new mix. */
-        if (lib.n && time(0) - last > IDLE_S && !mx.pending) lib_free();
+        if (time(0) - last > idle && scanner <= 0 && !(nw.running && !nw.done)) break;
     }
     scan_stop();
     close(s);

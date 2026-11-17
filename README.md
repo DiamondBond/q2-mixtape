@@ -6,7 +6,7 @@ A card app for the Shanling Q2. Install it from Q2 Pod's App Store, or unzip `mi
 
 ## The mixes
 
-Each mix is about 45 minutes (at most 20 songs), drawn when you open it and kept until you open another or press **Re-roll**, with some variety: never the same artist twice in a row, at most two songs by one artist, and at most one from any album but the one it's made from. Songs under a minute are left out.
+Each mix is about 45 minutes (at most 20 songs), drawn when you open it and kept until you open another, press **Re-roll** or leave Mixtape for ten minutes, with some variety: never the same artist twice in a row, at most two songs by one artist, and at most one from any album but the one it's made from. Songs under a minute are left out, and so are the tracks of a CUE image: a playlist can only name the whole file.
 
 ```
 Mixtape
@@ -42,7 +42,7 @@ Last.fm also needs an API key. If this build has none, Mixtape uses the one unde
 
 ## Listen to Your Music
 
-The sound mixes need each song heard once: 30 seconds from its middle, turned into a short profile of its timbre. **Listen to Your Music → Listen Now** does it on the Q2, in the background and at the lowest priority so playback comes first, and keeps the Q2 awake while it works. A big library takes hours: keep the Q2 charging. **Stop Listening** keeps what has been heard. Next time only the songs not heard yet, and songs that changed, are heard. CUE images' tracks are heard on the Q2 only.
+The sound mixes need each song heard once: 30 seconds from its middle, turned into a short profile of its timbre. **Listen to Your Music → Listen Now** does it on the Q2, in the background and at the lowest priority so playback comes first, and keeps the Q2 awake while it works. A big library takes hours: keep the Q2 charging. **Stop Listening** keeps what has been heard. Next time only the songs not heard yet, and songs that changed, are heard.
 
 ### Faster, on a computer
 
@@ -53,7 +53,7 @@ pip install numpy          # and ffmpeg from your package manager or ffmpeg.org
 python3 mixtape_index.py /path/to/the/card
 ```
 
-Point it at the card's root (in a card reader, or the Q2 as USB storage). It prints how many songs it found and how many it has to hear, then its progress and the time left, and writes `.mixtape/profiles` on the card. Ctrl-C stops it and keeps what was heard; run it again to go on, or after adding music to hear only what's new. A song is known by its path and size, so the Q2 and the computer share the file; a renamed or moved song is heard again.
+Point it at the card's root (in a card reader, or the Q2 as USB storage). It prints how many songs it found and how many it has to hear, then its progress and the time left, and writes `.mixtape/profiles` on the card. Ctrl-C stops it and keeps what was heard; run it again to go on, or after adding music to hear only what's new. A song is known by its path and size, so the Q2 and the computer share the file; a renamed or moved song is heard again. On a Mac, a song whose name has accents may not be recognised, and the Q2 then hears it itself.
 
 If your music lives on the computer laid out as on the card, run it on that folder with `-o /path/to/the/card/.mixtape/profiles`. `-j` sets how many songs are heard at once (all cores by default).
 

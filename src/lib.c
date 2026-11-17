@@ -67,12 +67,9 @@ static unsigned long long fnv64(unsigned long long h, const char *s) {
 }
 /* A profile's key: FNV-1a 64 of the path on the card (a computer sees the same), with a CUE
  * track's bounds after it, since an image's tracks share one file. */
-unsigned long long prof_key(const char *path, int start, int end) {
+unsigned long long prof_key(const char *path) {
     if (!strncmp(path, CARD "/", sizeof CARD)) path += sizeof CARD;
-    unsigned long long h = fnv64(0xcbf29ce484222325ull, path);
-    char cue[32];
-    if (start || end) snprintf(cue, sizeof cue, "\t%d-%d", start, end), h = fnv64(h, cue);
-    return h;
+    return fnv64(0xcbf29ce484222325ull, path);
 }
 /* Q2 Pod's listen_key, which keys its play counts and hearts: the path's fnv, a CUE track's
  * start mixed in. Never 0. */
@@ -403,8 +400,26 @@ static int by_name(const void *a, const void *b) {
     return strcasecmp(lib_str(((const group_t *)a)->name), lib_str(((const group_t *)b)->name));
 }
 
-/* Q2 Pod's measured length of path, less a CUE start; 0 unknown. */
-static int dur_sec(const char *path, int start) {
+/* Q2 Pod's measured lengths (Scan Song Durations), mapped while the library is read or a scan
+ * runs. */
+void dur_open(void) {
+    int fd = open(R(DUR_FILE), O_RDONLY);
+    struct stat s;
+    if (fd >= 0 && !fstat(fd, &s) && s.st_size > 8) {
+        void *m = mmap(0, (size_t)s.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+        if (m != MAP_FAILED && !memcmp(m, "Q2DUR2", 7))
+            dur.map = m, dur.len = (size_t)s.st_size, dur.n = (unsigned)((s.st_size - 8) / 24);
+        else if (m != MAP_FAILED)
+            munmap(m, (size_t)s.st_size);
+    }
+    if (fd >= 0) close(fd);
+}
+void dur_close(void) {
+    if (dur.map) munmap((void *)dur.map, dur.len);
+    memset(&dur, 0, sizeof dur);
+}
+/* path's measured length in seconds; 0 unknown. */
+int dur_sec(const char *path) {
     unsigned long long key = fnv64(0xcbf29ce484222325ull, path);
     unsigned lo = 0, hi = dur.n;
     while (lo < hi) { /* records: {u64 key, u32 size, mtime, ns, i32 sec} */
@@ -419,13 +434,13 @@ static int dur_sec(const char *path, int start) {
     int sec = 0;
     if (lo < dur.n && !memcmp(dur.map + 8 + 24 * (size_t)lo, &key, 8))
         memcpy(&sec, dur.map + 8 + 24 * (size_t)lo + 20, 4);
-    return sec > start ? sec - start : 0;
+    return sec > 0 ? sec : 0;
 }
 
 static int cap_songs;
 static int lib_row(void *ctx, void *st) {
-    const char *path = col_s(st, 1), *album = col_s(st, 4), *aa = col_s(st, 5),
-               *artist = col_s(st, 6), *year = col_s(st, 9);
+    const char *path = col_s(st, 1), *album = col_s(st, 2), *aa = col_s(st, 3),
+               *artist = col_s(st, 4), *year = col_s(st, 7);
     if (!music(path)) return 0;
     if (lib.n == cap_songs) {
         int cap = cap_songs ? cap_songs * 2 : 4096;
@@ -435,20 +450,19 @@ static int lib_row(void *ctx, void *st) {
     }
     if (!strcmp(artist, "(null)")) artist = ""; /* stock's untagged artist */
     song_t *s = &lib.v[lib.n++];
-    int start = col_i(st, 2), end = col_i(st, 3);
     memset(s, 0, sizeof *s);
     s->id = (unsigned)col_i(st, 0);
-    s->lkey = listen_key(path, start);
-    s->pkey = prof_key(path, start, end);
+    s->lkey = listen_key(path, 0);
+    s->pkey = prof_key(path);
     s->artist = norm_hash(artist, 0), s->album_artist = norm_hash(aa, 0);
-    s->title = norm_hash(col_s(st, 7), 1);
+    s->title = norm_hash(col_s(st, 5), 1);
     s->album = album_ident(album, aa, path);
-    genres(col_s(st, 8), s->genre);
+    genres(col_s(st, 6), s->genre);
     if (year[0] >= '1' && year[0] <= '9' && year[1] >= '0' && year[1] <= '9' && year[2] >= '0' &&
         year[2] <= '9' && year[3] >= '0' && year[3] <= '9')
         s->year = (short)((year[0] - '0') * 1000 + (year[1] - '0') * 100 + (year[2] - '0') * 10 +
                           year[3] - '0');
-    int sec = end > start ? end - start : dur.n ? dur_sec(path, start) : 0;
+    int sec = dur_sec(path);
     s->sec = (short)(sec < 32767 ? sec : 32767);
     s->recency = -1;
     group_add(&albums, s->album, album, *aa ? aa : artist);
@@ -564,24 +578,15 @@ int lib_load(int fresh) {
     if (stamp != lib.stamp || !lib.n) {
         lib_free();
         scope_load();
-        int fd = open(R(DUR_FILE), O_RDONLY);
-        struct stat s;
-        if (fd >= 0 && !fstat(fd, &s) && s.st_size > 8) {
-            void *m = mmap(0, (size_t)s.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
-            if (m != MAP_FAILED && !memcmp(m, "Q2DUR2", 7))
-                dur.map = m, dur.len = (size_t)s.st_size, dur.n = (unsigned)((s.st_size - 8) / 24);
-            else if (m != MAP_FAILED)
-                munmap(m, (size_t)s.st_size);
-        }
-        if (fd >= 0) close(fd);
+        dur_open();
         unsigned last = 0;
         pool_add("");
-        int got = db_page(db,
-                          "select id,fileurl,time,time_end,album,albumsonger,songer,name,style,"
-                          "year from songtable where id>? and " MUSIC_SQL " order by id limit 500",
-                          &last, lib_row, 0);
-        if (dur.map) munmap((void *)dur.map, dur.len);
-        memset(&dur, 0, sizeof dur);
+        int got =
+            db_page(db,
+                    "select id,fileurl,album,albumsonger,songer,name,style,year from songtable"
+                    " where id>? and " MUSIC_SQL " order by id limit 500",
+                    &last, lib_row, 0);
+        dur_close();
         lib.albums = albums.v, lib.nalbums = albums.n;
         lib.artists = artists.v, lib.nartists = artists.n;
         free(albums.slot);

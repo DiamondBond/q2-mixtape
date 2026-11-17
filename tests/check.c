@@ -101,6 +101,13 @@ static void check_json(void) {
     memset(&s, 0, sizeof s);
     CHECK(json_walk(deep, collect, &s) && s.n == 0); /* past JSON_DEPTH: walked, not reported */
 
+    char *nest = calloc(1, 200001);
+    memset(nest, '[', 32), memset(nest + 32, ']', 32);
+    CHECK(json_walk(nest, collect, &s)); /* 32 deep: walked */
+    memset(nest, '[', 200000);
+    CHECK(!json_walk(nest, collect, &s)); /* deeper: refused, not a stack overflow */
+    free(nest);
+
     CHECK(norm_hash("The Beatles", 0) == norm_hash("beatles", 0));
     CHECK(norm_hash("AC/DC", 0) == norm_hash("acdc", 0));
     CHECK(norm_hash("Bonobo feat. Totally Enormous Extinct Dinosaurs", 0) ==
@@ -163,9 +170,21 @@ static int by_key(const void *a, const void *b) {
     unsigned long long x = ((const dur_t *)a)->key, y = ((const dur_t *)b)->key;
     return (x > y) - (x < y);
 }
+static unsigned long long path_key(const char *path) { /* Q2 Pod's duration key */
+    unsigned long long h = 0xcbf29ce484222325ull;
+    for (; *path; ++path) h = (h ^ (unsigned char)*path) * 0x100000001b3ull;
+    return h;
+}
+static void put_durations(const char *file, dur_t *d, int n) {
+    qsort(d, (size_t)n, sizeof *d, by_key); /* sorted by key, as the firmware keeps it */
+    FILE *f = fopen(file, "wb");
+    CHECK(f && fwrite("Q2DUR2\0\0", 8, 1, f) == 1 &&
+          fwrite(d, sizeof *d, (size_t)n, f) == (size_t)n && !fclose(f));
+}
 static void make_library(void) {
     char cmd[512], path[256];
-    sh("rm -rf " ROOT " && mkdir -p " ROOT "/mnt/data " ROOT "/mnt/mmc/.mixtape " ROOT "/tmp");
+    sh("rm -rf " ROOT " && mkdir -p " ROOT "/mnt/data " ROOT "/mnt/mmc/.mixtape " ROOT
+       "/mnt/mmc/Music " ROOT "/tmp");
     sqlite3 *db;
     CHECK(!sqlite3_open_v2(ROOT "/mnt/data/database.db", &db, 6, 0));
     static const char *schema = "create table %s(id INTEGER PRIMARY KEY, filename VARCHAR(512), "
@@ -236,19 +255,27 @@ static void make_library(void) {
     /* lengths, as Scan Song Durations leaves them: every 37th song an interlude */
     dur_t *d = calloc(SONGS, sizeof *d);
     for (int i = 0; i < SONGS; ++i) {
-        unsigned long long h = 0xcbf29ce484222325ull;
         song_path(path, sizeof path, i);
-        for (const char *s = path; *s; ++s) h = (h ^ (unsigned char)*s) * 0x100000001b3ull;
-        d[i].key = h, d[i].sec = i % 37 ? 150 + i % 200 : 40;
+        d[i].key = path_key(path), d[i].sec = i % 37 ? 150 + i % 200 : 40;
     }
-    qsort(d, SONGS, sizeof *d, by_key); /* sorted by key, as the firmware keeps it */
-    FILE *f = fopen(ROOT "/mnt/data/ringnav-durations-v1", "wb");
-    CHECK(f && fwrite("Q2DUR2\0\0", 8, 1, f) == 1 && fwrite(d, sizeof *d, SONGS, f) == SONGS &&
-          !fclose(f));
+    put_durations(ROOT "/mnt/data/ringnav-durations-v1", d, SONGS);
     free(d);
 
+    /* the songs' files, empty: a mix queues only what is on the card */
+    for (int i = 0; i < SONGS; ++i) {
+        char full[320], *album, *artist;
+        song_path(path, sizeof path, i);
+        snprintf(full, sizeof full, ROOT "%s", path);
+        if (!(i % 10)) {
+            *(album = strrchr(full, '/')) = 0, *(artist = strrchr(full, '/')) = 0;
+            mkdir(full, 0755), *artist = '/', mkdir(full, 0755), *album = '/';
+        }
+        int fd = open(full, O_CREAT | O_WRONLY, 0644);
+        CHECK(fd >= 0 && !close(fd));
+    }
+
     /* profiles for 40,000 songs, near their genre's sound, and one record a cut write left */
-    f = fopen(ROOT PROF_FILE, "wb");
+    FILE *f = fopen(ROOT PROF_FILE, "wb");
     prof_head h = { "", PROF_VERSION, sizeof(prof_t), 0 };
     memcpy(h.magic, PROF_MAGIC, 4);
     CHECK(f && fwrite(&h, sizeof h, 1, f) == 1);
@@ -256,7 +283,7 @@ static void make_library(void) {
     for (int i = 0; i < 40000; ++i) {
         prof_t p = { 0 };
         song_path(path, sizeof path, i);
-        p.key = prof_key(path, 0, 0), p.size = 1000, p.status = MX_OK;
+        p.key = prof_key(path), p.size = 1000, p.status = MX_OK;
         for (int k = 0; k < MX_DIMS; ++k) p.f[k] = cluster(i / 10 % 6, k, &r);
         CHECK(fwrite(&p, sizeof p, 1, f) == 1);
     }
@@ -299,18 +326,17 @@ static void check_library(void) {
     double t = now_s();
     int n = lib_load(1);
     double load = now_s() - t;
-    CHECK(n == SONGS + 2); /* the CUE image's two tracks; no podcast, book or ringtone */
-    CHECK(lib.nalbums == 5001 && lib.nartists == 1501);
+    CHECK(n == SONGS); /* no podcast, book, ringtone or CUE image's track */
+    CHECK(lib.nalbums == 5000 && lib.nartists == 1500 && lib_find(60004) < 0);
     CHECK(lib.profs.n == 40000);
-    int heard = 0, i0 = lib_find(1), cue = lib_find(60005);
+    int heard = 0, i0 = lib_find(1);
     for (int i = 0; i < n; ++i) heard += lib.v[i].prof != 0;
-    CHECK(heard == 40000 && i0 == 0 && cue == n - 1);
+    CHECK(heard == 40000 && i0 == 0);
     CHECK(lib.v[i0].hearts == 5 && lib.v[i0].sec == 40 &&
           lib.v[i0].year == 1960); /* My Fav; an interlude */
     CHECK(lib.v[lib_find(101)].plays == 600 && lib.v[lib_find(101)].recency == 0);
     CHECK(lib.v[lib_find(2001)].hearts == 1 && lib.v[lib_find(2002)].hearts == 2);
     CHECK(lib.v[lib_find(11)].album_hearts == 5 && !lib.v[lib_find(1001)].album_hearts);
-    CHECK(lib.v[cue].sec == 300 && lib.v[cue].pkey != lib.v[cue - 1].pkey);
     printf("library: %d songs read in %.2f s, %zu bytes a song (%.1f MB), %d albums, %d artists\n",
            n, load, sizeof(song_t), (double)n * sizeof(song_t) / 1e6, lib.nalbums, lib.nartists);
     t = now_s();
@@ -547,7 +573,11 @@ static void ask(const char *root, reply_t *r, const char *line) {
     shutdown(fd, SHUT_WR);
     free(r->buf);
     r->buf = calloc(1, 70000);
-    for (int k = 0, got; (got = (int)read(fd, r->buf + k, 69999 - (size_t)k)) > 0;) k += got;
+    struct timeval tv = { 5, 0 };
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+    int got, k = 0;
+    while ((got = (int)read(fd, r->buf + k, 69999 - (size_t)k)) > 0) k += got;
+    CHECK(!got); /* closed: Q2 Pod reads a reply until the close */
     close(fd);
     (void)path;
     CHECK(!strncmp(r->buf, "Q2SPOT/1\n", 9));
@@ -635,7 +665,12 @@ static void check_app(void) {
     CHECK(!strcmp(r.head[2], "This Mixtape has changed"));
     ask(ROOT, &r, "mix\tmost");
     snprintf(gen, sizeof gen, "%s", r.f[0][4]);
-    int songs = r.rows - 3;
+    int songs = r.rows - 3, gone;
+    char gone_path[256], gone_full[320];
+    CHECK(sscanf(r.f[1][2], "Song %d", &gone) == 1); /* its file deleted since: never queued */
+    song_path(gone_path, sizeof gone_path, gone);
+    snprintf(gone_full, sizeof gone_full, ROOT "%s", gone_path);
+    CHECK(!unlink(gone_full));
     snprintf(c, sizeof c, "play\t%s", gen);
     ask(ROOT, &r, c);
     CHECK(!strcmp(r.head[1], "ok") && !r.head[2][0]);
@@ -646,9 +681,15 @@ static void check_app(void) {
           !memcmp(m3u, "\xef\xbb\xbf/mnt/mmc/Music/", 17));
     int lines = 0;
     for (char *s = m3u; *s; ++s) lines += *s == '\n';
-    CHECK(lines == songs);
+    CHECK(lines == songs - 1 && !strstr(m3u, gone_path));
     free(play);
     free(m3u);
+    char kept[32];
+    snprintf(kept, sizeof kept, "%d songs \xc2\xb7 ", songs - 1);
+    ask(ROOT, &r, "mix\tmost");
+    CHECK(!strcmp(r.f[1][3], "Not on the card") && strstr(r.f[0][3], kept));
+    int fd = open(gone_full, O_CREAT | O_WRONLY, 0644);
+    CHECK(fd >= 0 && !close(fd));
     snprintf(c, sizeof c, "save\t%s", gen);
     ask(ROOT, &r, c);
     CHECK(strstr(r.head[2], "Most Played Mixtape 20") && strstr(r.head[2], "joins Playlists"));
@@ -660,6 +701,20 @@ static void check_app(void) {
     ask(ROOT, &r, c); /* the same name again: a number after it */
     CHECK(strstr(r.head[2], " 2\xe2\x80\x9d"));
     free(lib);
+    /* Q2 Pod hasn't taken the first (something plays): the second carries its add */
+    char seq[32], done[64];
+    int adds = 0;
+    lib = slurp(ROOT "/tmp/q2-mixtape.library", 0);
+    for (char *a = lib; (a = strstr(a, "\nadd ")); ++a) ++adds;
+    CHECK(adds == 2 && sscanf(lib, "%31s", seq) == 1);
+    free(lib);
+    snprintf(done, sizeof done, "%s ok\n", seq);
+    put(ROOT "/tmp/q2-mixtape.library.done", done, strlen(done));
+    ask(ROOT, &r, c); /* answered: the third carries none */
+    lib = slurp(ROOT "/tmp/q2-mixtape.library", 0), adds = 0;
+    for (char *a = lib; (a = strstr(a, "\nadd ")); ++a) ++adds;
+    CHECK(adds == 1 && strstr(lib, " 3.m3u\n"));
+    free(lib);
 
     ask(ROOT, &r, "albums");
     CHECK(!strcmp(r.f[0][0], "search") && r.rows == 50 && !strcmp(r.head[2], "pages") &&
@@ -667,7 +722,7 @@ static void check_app(void) {
     CHECK(!strcmp(r.f[1][2], "Album 0") && !strcmp(r.f[1][3], "Artist 0") &&
           !strncmp(r.f[1][4], "album ", 6));
     ask(ROOT, &r, "albums\t4990");
-    CHECK(r.rows == 11 && !r.head[3][0] && strcmp(r.f[0][0], "search"));
+    CHECK(r.rows == 10 && !r.head[3][0] && strcmp(r.f[0][0], "search"));
     ask(ROOT, &r, "artists");
     CHECK(!strcmp(r.f[1][2], "Artist 0") && !strncmp(r.f[1][4], "artist ", 7));
     ask(ROOT, &r, "search\tartist 1499");
@@ -714,7 +769,7 @@ static void check_app(void) {
         CHECK(strstr(r.f[i][3], "Artist 302") || strstr(r.f[i][3], "Artist 303"));
 
     ask(ROOT, &r, "scan");
-    CHECK(!strcmp(r.f[0][2], "Songs heard") && !strcmp(r.f[0][3], "40,000 of 50,002") &&
+    CHECK(!strcmp(r.f[0][2], "Songs heard") && !strcmp(r.f[0][3], "40,000 of 50,000") &&
           find(&r, "Listen Now") >= 0);
     app_end(pid);
 
@@ -760,9 +815,12 @@ static void check_scan(void) {
                         "(1,'/mnt/mmc/Music/0.flac','A','X','Low',0,0),(2,'/mnt/mmc/Music/"
                         "1.flac','A','X','High',0,0),"
                         "(3,'/mnt/mmc/Music/2.flac','B','Y','Noise',0,0),(4,'/mnt/mmc/Music/"
-                        "gone.flac','B','Y','Gone',0,0);",
+                        "gone.flac','B','Y','Gone',0,0),"
+                        "(5,'/mnt/mmc/Music/1.flac','A','X','A CUE track',10,20);",
                         0, 0, 0));
     sqlite3_close(db);
+    dur_t d[1] = { { path_key("/mnt/mmc/Music/0.flac"), 0, 0, 0, 35 } }; /* measured: not asked */
+    put_durations(SMALL "/mnt/data/ringnav-durations-v1", d, 1);
     for (int round = 0; round < 3; ++round) {
         pid_t pid = app_start(SMALL, "progress\n");
         ask(SMALL, &r, "scanstart");
@@ -784,23 +842,64 @@ static void check_scan(void) {
         profs_t p;
         setenv("MIXTAPE_ROOT", SMALL, 1);
         CHECK(profs_open(&p) == 3);
-        const prof_t *a = profs_find(&p, prof_key("/mnt/mmc/Music/0.flac", 0, 0)),
-                     *b = profs_find(&p, prof_key("/mnt/mmc/Music/2.flac", 0, 0));
-        CHECK(a && a->status == MX_OK && a->sec == 40 && b && b->status == MX_OK && b->sec == 50);
+        const prof_t *a = profs_find(&p, prof_key("/mnt/mmc/Music/0.flac")),
+                     *b = profs_find(&p, prof_key("/mnt/mmc/Music/2.flac"));
+        CHECK(a && a->status == MX_OK && a->sec == 35 && b && b->status == MX_OK && b->sec == 50);
         profs_close(&p);
         app_end(pid);
         if (round == 1) /* a changed file: heard again */
             sh("ffmpeg -v quiet -f lavfi -i sine=frequency=330:duration=40 -ac 1 -y " SMALL
                "/mnt/mmc/Music/0.flac");
     }
-    /* Stop Listening mid-way: the TERM kills its ffmpeg, what was heard stays */
-    sh("rm -f " SMALL "/mnt/mmc/.mixtape/profiles");
+    /* A song that never ends (a FIFO nobody writes): Listen Now's reply still closes at once (ask
+     * checks), the app stays while it listens, Stop Listening kills its ffmpeg and keeps what was
+     * heard, and the app then ends by itself, nothing asked */
+    sh("rm -f " SMALL "/mnt/mmc/.mixtape/profiles && mkfifo " SMALL "/mnt/mmc/Music/stuck.flac");
+    CHECK(!sqlite3_open_v2(SMALL "/mnt/data/database.db", &db, 2, 0));
+    CHECK(!sqlite3_exec(db,
+                        "insert into songtable(id,fileurl,name,time,time_end) values"
+                        "(6,'/mnt/mmc/Music/stuck.flac','Stuck',0,0)",
+                        0, 0, 0));
+    sqlite3_close(db);
+    setenv("MIXTAPE_IDLE_S", "1", 1);
     pid_t pid = app_start(SMALL, "");
+    unsetenv("MIXTAPE_IDLE_S");
+    double t = now_s();
     ask(SMALL, &r, "scanstart");
+    CHECK(now_s() - t < 2);
+    char *at = 0;
+    for (; (!at || strncmp(at, "listen 3 4 ", 11)) && now_s() - t < 30; usleep(100000))
+        free(at), at = slurp(SMALL "/tmp/q2-mixtape.scan", 0);
+    CHECK(at && !strncmp(at, "listen 3 4 ", 11));
+    free(at);
+    sleep(3);
+    CHECK(!waitpid(pid, 0, WNOHANG)); /* listening: not idle */
     ask(SMALL, &r, "scanstop");
-    ask(SMALL, &r, "scan");
-    CHECK(find(&r, "Songs heard") >= 0);
+    int status = -1;
+    for (t = now_s(); waitpid(pid, &status, WNOHANG) != pid && now_s() - t < 10;) usleep(100000);
+    CHECK(WIFEXITED(status) && !WEXITSTATUS(status));
+    at = slurp(SMALL "/tmp/q2-mixtape.scan", 0);
+    CHECK(at && !strcmp(at, "end 3 4 4\n"));
+    free(at);
+    profs_t p;
+    CHECK(profs_open(&p) == 3);
+    profs_close(&p);
+
+    /* a newer Mixtape's file: kept as it is, and the page says why nothing was heard */
+    size_t n;
+    char *was = slurp(SMALL PROF_FILE, &n), *now;
+    unsigned v = PROF_VERSION + 1;
+    memcpy(was + 4, &v, 4);
+    put(SMALL PROF_FILE, was, n);
+    pid = app_start(SMALL, "");
+    ask(SMALL, &r, "scanstart");
+    for (t = now_s(); find(&r, "Songs heard") < 0 && now_s() - t < 10; usleep(100000))
+        ask(SMALL, &r, "scan");
+    CHECK(find(&r, "Stopped: update Mixtape first") >= 0);
+    CHECK((now = slurp(SMALL PROF_FILE, 0)) && !memcmp(now, was, n));
     app_end(pid);
+    free(was);
+    free(now);
     free(r.buf);
 }
 
@@ -808,7 +907,7 @@ int main(int argc, char **argv) {
     if (argc == 3 && !strcmp(argv[1], "analyse")) {
         prof_t p = { 0 };
         short *pcm = malloc(MX_CLIP_S * MX_RATE * sizeof *pcm);
-        CHECK(!analyse(argv[2], 0, 0, &p, pcm));
+        CHECK(!analyse(argv[2], 0, &p, pcm));
         printf("%d %d", p.sec, p.status);
         for (int k = 0; k < MX_DIMS; ++k) printf(" %.9g", p.f[k]);
         printf("\n");
@@ -828,8 +927,8 @@ int main(int argc, char **argv) {
     }
     if (argc == 6 && !strcmp(argv[1], "keys")) {
         int cue = atoi(argv[3]);
-        printf("%llu %u %u\n", prof_key(argv[2], cue, cue ? cue + 100 : 0),
-               listen_key(argv[2], cue), album_ident(argv[4], argv[5], argv[2]));
+        printf("%llu %u %u\n", prof_key(argv[2]), listen_key(argv[2], cue),
+               album_ident(argv[4], argv[5], argv[2]));
         return 0;
     }
     if (argc == 4 && !strcmp(argv[1], "lookup")) {
@@ -838,7 +937,7 @@ int main(int argc, char **argv) {
         setenv("MIXTAPE_ROOT", argv[2], 1);
         snprintf(path, sizeof path, "/mnt/mmc/%s", argv[3]);
         int n = profs_open(&p);
-        const prof_t *f = profs_find(&p, prof_key(path, 0, 0));
+        const prof_t *f = profs_find(&p, prof_key(path));
         printf("%d %d %d %u", n, f ? f->sec : -1, f ? f->status : -1, f ? f->size : 0);
         for (int k = 0; f && k < MX_DIMS; ++k) printf(" %.9g", f->f[k]);
         printf("\n");

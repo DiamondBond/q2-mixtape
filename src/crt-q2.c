@@ -63,3 +63,17 @@ int fstatat(int d, const char *p, struct stat *s, int f)
     return __fxstatat(_STAT_VER, d, p, s, f);
 }
 int mknod(const char *p, mode_t m, dev_t d) { return __xmknod(_MKNOD_VER, p, m, &d); }
+
+/* their 64-bit forms, which _FILE_OFFSET_BITS=64 code calls (this file is built without it) */
+int __xstat64(int, const char *, struct stat64 *);
+int __fxstat64(int, int, struct stat64 *);
+int __lxstat64(int, const char *, struct stat64 *);
+int __fxstatat64(int, int, const char *, struct stat64 *, int);
+
+int stat64(const char *p, struct stat64 *s) { return __xstat64(_STAT_VER, p, s); }
+int fstat64(int fd, struct stat64 *s) { return __fxstat64(_STAT_VER, fd, s); }
+int lstat64(const char *p, struct stat64 *s) { return __lxstat64(_STAT_VER, p, s); }
+int fstatat64(int d, const char *p, struct stat64 *s, int f)
+{
+    return __fxstatat64(_STAT_VER, d, p, s, f);
+}

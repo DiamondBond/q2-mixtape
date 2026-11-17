@@ -29,7 +29,7 @@ typedef struct {
     json_cb cb;
     void *ctx;
     char *keys[JSON_DEPTH];
-    int depth;
+    int depth, nest; /* nest: arrays too, which a stack bounds */
 } walk_t;
 
 static void ws(walk_t *w) {
@@ -94,9 +94,10 @@ static char *string(walk_t *w) {
 static int value(walk_t *w) {
     ws(w);
     if (*w->p == '{' || *w->p == '[') {
+        if (++w->nest > 32) return 0; /* no answer is this deep: the worker's stack would be */
         char close = *w->p++ == '{' ? '}' : ']';
         ws(w);
-        if (*w->p == close) return ++w->p, 1;
+        if (*w->p == close) return ++w->p, --w->nest, 1;
         for (;;) {
             ws(w);
             if (close == '}') {
@@ -118,7 +119,7 @@ static int value(walk_t *w) {
             }
             if (*w->p++ != close) return 0;
             if (close == '}' && w->depth <= JSON_DEPTH) w->cb(w->ctx, w->depth, w->keys, 0);
-            return 1;
+            return --w->nest, 1;
         }
     }
     if (*w->p == '"') {
@@ -141,7 +142,7 @@ static int value(walk_t *w) {
  * (an array's elements take its key), and with value 0 as each object ends. js is unescaped in
  * place. 0 when malformed. */
 int json_walk(char *js, json_cb cb, void *ctx) {
-    walk_t w = { js, cb, ctx, { 0 }, 0 };
+    walk_t w = { js, cb, ctx, { 0 }, 0, 0 };
     return value(&w) && (ws(&w), !*w.p);
 }
 static int is(char **keys, int depth, int want, const char *a, const char *b, const char *c) {

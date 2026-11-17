@@ -62,7 +62,9 @@ static int run(char **args, int out, char *buf, int size) {
     return WEXITSTATUS(status) == 127 ? -2 : n;
 }
 
-/* path's length in whole seconds from ffmpeg's "Duration: 00:03:21.45"; 0 unknown. */
+/* path's length in whole seconds from ffmpeg's "Duration: 00:03:21.45"; 0 unknown.
+ * ponytail: the first 16 KB of its report only, which tags of lyrics can fill before the length;
+ * then the clip is the first 30 s. Asked only of songs Q2 Pod hasn't measured. */
 static int probe(const char *path) {
     char buf[16384], *args[] = { "ffmpeg", "-nostdin", "-hide_banner", "-i", (char *)path, 0 };
     int n = run(args, 0, buf, sizeof buf - 1), h, m, s;
@@ -72,17 +74,13 @@ static int probe(const char *path) {
     return d && sscanf(d + 10, "%d:%d:%d", &h, &m, &s) == 3 ? h * 3600 + m * 60 + s : 0;
 }
 
-/* A song's profile into p: 30 s from its middle (a CUE track's, from start, len seconds; len 0
- * asks ffmpeg), decoded to 22.05 kHz mono into pcm (MX_CLIP_S * MX_RATE samples). -1 when killed,
- * -2 when there is no ffmpeg; otherwise p->status says whether it could be heard. The same as
+/* A song's profile into p: 30 s from its middle (len seconds long; 0 asks ffmpeg), decoded to
+ * 22.05 kHz mono into pcm (MX_CLIP_S * MX_RATE samples). -1 when killed, -2 when there is no
+ * ffmpeg; otherwise p->status says whether it could be heard. The same as
  * desktop/mixtape_index.py's analyse(). */
-int analyse(const char *path, int start, int len, prof_t *p, short *pcm) {
-    if (len <= 0) {
-        int whole = probe(path);
-        if (whole < 0) return whole;
-        len = whole > start ? whole - start : 0;
-    }
-    int at = start + (len > MX_CLIP_S ? (len - MX_CLIP_S) / 2 : 0);
+int analyse(const char *path, int len, prof_t *p, short *pcm) {
+    if (len <= 0 && (len = probe(path)) < 0) return len;
+    int at = len > MX_CLIP_S ? (len - MX_CLIP_S) / 2 : 0;
     char ss[16], dur[16];
     snprintf(ss, sizeof ss, "%d", at);
     snprintf(dur, sizeof dur, "%d", len > 0 && len < MX_CLIP_S ? len : MX_CLIP_S);
@@ -127,7 +125,7 @@ static int check_row(void *ctx, void *st) {
     if (!music(path)) return 0;
     if (!(++c->done % 200)) say("check", c->done, c->total, -1);
     if (stat(R(path), &s)) return 0; /* gone: nothing to hear */
-    const prof_t *p = profs_find(c->profs, prof_key(path, col_i(st, 2), col_i(st, 3)));
+    const prof_t *p = profs_find(c->profs, prof_key(path));
     if (p && p->size == (unsigned)s.st_size) return 0;
     if (c->n == c->cap) {
         int cap = c->cap ? 2 * c->cap : 1024;
@@ -138,19 +136,14 @@ static int check_row(void *ctx, void *st) {
     c->todo[c->n++] = (unsigned)col_i(st, 0);
     return 0;
 }
-typedef struct {
-    char path[1024];
-    int start, end;
-} song_at;
 static int song_row(void *ctx, void *st) {
-    song_at *s = ctx;
-    snprintf(s->path, sizeof s->path, "%s", col_s(st, 1));
-    s->start = col_i(st, 2), s->end = col_i(st, 3);
+    snprintf(ctx, 1024, "%s", col_s(st, 1));
     return 1;
 }
 
-/* The profiles file opened to append: a missing or foreign one (another version) started anew,
- * a record a cut write left dropped. -1 when the card refuses. */
+/* The profiles file opened to append: a missing or foreign one (an older version) started anew,
+ * a record a cut write left dropped. -1 when the card refuses, -2 when a newer Mixtape (or its
+ * indexer) wrote it: that one is kept. */
 static int append_open(void) {
     int fd = open(R(PROF_FILE), O_RDWR | O_CREAT, 0644);
     prof_head h = { "", PROF_VERSION, sizeof(prof_t), 0 }, got;
@@ -160,7 +153,13 @@ static int append_open(void) {
     long long n = s.st_size < (long long)sizeof h
                       ? 0
                       : (s.st_size - (long long)sizeof h) / (long long)sizeof(prof_t);
-    if (!n || pread(fd, &got, sizeof got, 0) != sizeof got || memcmp(&got, &h, sizeof h)) n = 0;
+    if (!n || pread(fd, &got, sizeof got, 0) != sizeof got || memcmp(&got, &h, sizeof h)) {
+        if (n && !memcmp(got.magic, PROF_MAGIC, 4) && got.version > PROF_VERSION) {
+            close(fd);
+            return -2;
+        }
+        n = 0;
+    }
     if (ftruncate(fd, n ? (off_t)(sizeof h + n * sizeof(prof_t)) : 0) ||
         (!n && pwrite(fd, &h, sizeof h, 0) != sizeof h) || lseek(fd, 0, SEEK_END) < 0) {
         close(fd);
@@ -186,7 +185,7 @@ static void compact(void) {
 }
 
 /* The scan's codes, the last line of SCAN_FILE: "end <heard> <to hear> <code>". */
-enum { END_OK, END_CARD, END_FFMPEG, END_LIBRARY, END_TERM };
+enum { END_OK, END_CARD, END_FFMPEG, END_LIBRARY, END_TERM, END_NEWER };
 
 int scan_main(void) {
     struct sigaction sa = { 0 };
@@ -213,27 +212,30 @@ int scan_main(void) {
         &profs, 0, 0, 0, db_int(db, "select count(*) from songtable where " MUSIC_SQL), 0
     };
     unsigned last = 0;
-    int got = db_page(db,
-                      "select id,fileurl,time,time_end from songtable where id>? and " MUSIC_SQL
-                      " order by id limit 500",
-                      &last, check_row, &c);
+    int got = db_page(
+        db, "select id,fileurl from songtable where id>? and " MUSIC_SQL " order by id limit 500",
+        &last, check_row, &c);
     profs_close(&profs);
     int fd = got >= 0 && !quit ? append_open() : -1, heard = 0;
-    int code = quit ? END_TERM : got < 0 ? END_LIBRARY : fd < 0 ? END_CARD : END_OK;
+    int code = quit       ? END_TERM
+               : got < 0  ? END_LIBRARY
+               : fd == -2 ? END_NEWER
+               : fd < 0   ? END_CARD
+                          : END_OK;
     short *pcm = fd >= 0 ? malloc(MX_CLIP_S * MX_RATE * sizeof *pcm) : 0;
     long long began = now_ms();
     say("listen", 0, c.n, -1);
+    if (pcm) dur_open(); /* Q2 Pod's lengths: ffmpeg is asked only for the rest */
     for (int i = 0; pcm && i < c.n && !quit; ++i) {
-        song_at s;
+        char path[1024];
         prof_t p = { 0 };
         unsigned at = c.todo[i] - 1;
         struct stat st;
-        if (db_page(db,
-                    "select id,fileurl,time,time_end from songtable where id>? order by id limit 1",
-                    &at, song_row, &s) < 0 ||
-            at != c.todo[i] || stat(R(s.path), &st))
+        if (db_page(db, "select id,fileurl from songtable where id>? order by id limit 1", &at,
+                    song_row, path) < 0 ||
+            at != c.todo[i] || stat(R(path), &st))
             continue; /* gone since */
-        int r = analyse(R(s.path), s.start, s.end > s.start ? s.end - s.start : 0, &p, pcm);
+        int r = analyse(R(path), dur_sec(path), &p, pcm);
         if (r == -2) {
             code = END_FFMPEG;
             break;
@@ -243,7 +245,7 @@ int scan_main(void) {
             code = END_CARD;
             break;
         }
-        p.key = prof_key(s.path, s.start, s.end), p.size = (unsigned)st.st_size;
+        p.key = prof_key(path), p.size = (unsigned)st.st_size;
         if (write(fd, &p, sizeof p) != sizeof p) {
             code = END_CARD;
             break;
@@ -256,7 +258,9 @@ int scan_main(void) {
     free(pcm);
     free(c.todo);
     db_close(db);
-    if (fd >= 0) close(fd), compact();
+    dur_close();
+    if (fd >= 0) close(fd);
+    if (code == END_OK) compact(); /* not on a TERM: USB storage gives the app 3 s */
     say("end", heard, c.n, code);
     return 0;
 }
