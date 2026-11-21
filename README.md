@@ -40,7 +40,7 @@ Last.fm also needs an API key. If this build has none, Mixtape uses the one unde
 | Play Mixtape | Plays it from the first song |
 | A song | Centre strikes it; again to keep it |
 | Re-roll | New songs for the struck ones; with none struck, new songs for all but the album's or artist's own |
-| Save as Playlist | Adds it to Library → Playlists as "*name* Mixtape *date*", once nothing is playing |
+| Save as Playlist | Adds it to Library → Playlists as "*name* Mixtape *date*", once nothing is playing and you've left the Library |
 
 ## Listen to Your Music
 

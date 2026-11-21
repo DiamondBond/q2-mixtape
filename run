@@ -18,18 +18,19 @@ fi
 (
     echo 1000 > /proc/self/oom_score_adj # the app, its scan and ffmpeg go before Q2 Pod's demo
     child=
-    trap '[ -n "$child" ] && kill -TERM $child 2>/dev/null && wait $child; rm -f $pid /tmp/q2-mixtape.bin /tmp/q2-mixtape.run; exit 0' TERM INT
+    trap '[ -n "$child" ] && kill -TERM $child 2>/dev/null && wait $child; rm -f /tmp/q2-mixtape.bin /tmp/q2-mixtape.run $pid; exit 0' TERM INT
     delay=5
     while :; do
         nice -n 10 /tmp/q2-mixtape.bin &
         child=$!
         wait $child
         code=$?
+        child=
         [ $code = 0 ] && break
         sleep $delay &
         wait $! # a TERM ends the wait at once
         [ $delay -lt 60 ] && delay=$((delay * 2))
     done
-    rm -f $pid /tmp/q2-mixtape.bin /tmp/q2-mixtape.run
+    rm -f /tmp/q2-mixtape.bin /tmp/q2-mixtape.run $pid
 ) </dev/null >/dev/null 2>&1 &
 echo $! > $pid

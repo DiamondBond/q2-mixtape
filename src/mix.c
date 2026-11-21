@@ -430,8 +430,13 @@ int mx_reroll(song_t *v, int n, int *list, int len, unsigned char *struck, int t
     for (int i = 0; i < len; ++i)
         if (list[i] < 0 && (list[i] = mx_fill(v, n, list, len, i, room(total, target))) >= 0)
             v[list[i]].flags = MX_USED, total += MX_SECS(v[list[i]].sec);
-    for (int i = 0; i < len; ++i)
-        if (list[i] >= 0) list[k++] = list[i];
+    for (int i = 0; i < len; ++i) { /* a slot gone can leave one artist's songs side by side */
+        const song_t *c = list[i] >= 0 ? &v[list[i]] : 0, *prev = k ? &v[list[k - 1]] : 0;
+        if (c && prev && c->artist && c->artist == prev->artist && !(c->seed && prev->seed))
+            v[list[i]].flags = 0, total -= MX_SECS(c->sec);
+        else if (c)
+            list[k++] = list[i];
+    }
     for (int i = k; i < MX_MAX; ++i) list[i] = -1;
     k = fill_to(v, n, list, k, total, target);
     for (int i = 0; i < n; ++i)

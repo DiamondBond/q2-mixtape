@@ -27,6 +27,7 @@ MAGIC, VERSION = b'MXT2', 1
 HEAD = struct.Struct('<4sIII')  # src/mixtape.h prof_head
 RECORD = struct.Struct('<QIHBB26f')  # prof_t: key, size, sec, status, pad, 13 means, 13 spreads
 OK, FAILED = 1, 2
+FFMPEG_S = 120  # ffmpeg's time for one song, as the Q2's: one it is still on is heard next time
 COMPACT_SLACK = 1000  # stale records the file may carry before it is written afresh, as the Q2's
 AUDIO = {'.mp3', '.flac', '.wav', '.ape', '.m4a', '.aac', '.alac', '.ogg', '.oga', '.opus', '.wma',
          '.aif', '.aiff', '.aifc', '.dsf', '.dff', '.wv', '.mpc', '.tak', '.tta', '.mp2'}
@@ -92,7 +93,7 @@ def features(pcm):
 def probe(path):
     """Its length in whole seconds from ffmpeg's "Duration: 00:03:21.45"; 0 unknown."""
     err = subprocess.run(['ffmpeg', '-nostdin', '-hide_banner', '-i', path], stdin=subprocess.DEVNULL,
-                         stdout=subprocess.DEVNULL, stderr=subprocess.PIPE).stderr
+                         stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=FFMPEG_S).stderr
     m = re.search(rb'Duration: (\d+):(\d+):(\d+)', err)
     return int(m[1]) * 3600 + int(m[2]) * 60 + int(m[3]) if m else 0
 
@@ -104,7 +105,8 @@ def analyse(path):
     dur = length if 0 < length < CLIP_S else CLIP_S
     raw = subprocess.run(['ffmpeg', '-nostdin', '-v', 'quiet', '-ss', str(at), '-t', str(dur), '-i', path,
                           '-map', '0:a:0', '-ac', '1', '-ar', str(RATE), '-f', 's16le', '-'],
-                         stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL).stdout
+                         stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                         timeout=FFMPEG_S).stdout
     pcm = np.frombuffer(raw[:min(len(raw), CLIP_S * RATE * 2) // 2 * 2], dtype='<i2')
     f = features(pcm) if len(pcm) >= RATE else None
     sec = length if 0 < length < 65536 else 0
@@ -165,9 +167,12 @@ def songs(card):
 
 
 def hear(job):
+    """The song's record, or None when ffmpeg ran out of time: it is heard next time."""
     full, key, size = job
     try:
         sec, status, f = analyse(full)
+    except subprocess.TimeoutExpired:
+        return None
     except OSError:
         sec, status, f = 0, FAILED, np.zeros(2 * CEPS, np.float32)
     return RECORD.pack(key, size, sec, status, 0, *f.tolist())
@@ -218,12 +223,15 @@ def main(argv=None):
         pool = Pool(max(1, args.jobs), signal.signal, (signal.SIGINT, signal.SIG_IGN))  # Ctrl-C is ours
         try:
             for rec in pool.imap_unordered(hear, todo, chunksize=1):
-                f.write(rec)
-                key, size, sec, status = struct.unpack_from('<QIHB', rec)
-                known[key] = (size, rec)
-                records += 1
                 heard += 1
-                failed += status != OK
+                if rec is None:
+                    failed += 1
+                else:
+                    f.write(rec)
+                    key, size, sec, status = struct.unpack_from('<QIHB', rec)
+                    known[key] = (size, rec)
+                    records += 1
+                    failed += status != OK
                 if tty or heard % 100 == 0 or heard == len(todo):
                     left = (time.monotonic() - began) / heard * (len(todo) - heard)
                     print('%sHeard %d of %d (%d not heard), about %d min left  ' %

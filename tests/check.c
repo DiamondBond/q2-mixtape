@@ -19,6 +19,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <sys/wait.h>
+#include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -661,6 +662,11 @@ static void check_app(void) {
     ask(ROOT, &r, "nothing");
     CHECK(!strcmp(r.head[1], "unsupported"));
 
+    /* no database for a moment (an Update Library): said, and tried again at the next open */
+    CHECK(!rename(ROOT "/mnt/data/database.db", ROOT "/mnt/data/away.db"));
+    ask(ROOT, &r, "mix\tmost");
+    CHECK(r.rows == 1 && !strcmp(r.f[0][2], "No Library yet: run Update Library") && !r.head[2][0]);
+    CHECK(!rename(ROOT "/mnt/data/away.db", ROOT "/mnt/data/database.db"));
     double t = now_s();
     ask(ROOT, &r, "mix\tmost");
     printf("app: Most Played crafted in %.2f s, the library read included\n", now_s() - t);
@@ -680,10 +686,21 @@ static void check_app(void) {
     ask(ROOT, &r, "mix\tmost");
     CHECK(!strcmp(r.f[1][3], "Struck \xc2\xb7 Re-roll replaces it") &&
           !strcmp(r.f[r.rows - 2][3], "New songs for the struck ones"));
+    char kept_titles[MX_MAX][64];
+    int nkept = 0;
+    for (int i = 2; i < r.rows - 2; ++i) snprintf(kept_titles[nkept++], 64, "%s", r.f[i][2]);
+    /* a heart in stock's database since: the library read again, the mix kept */
+    sqlite3 *db;
+    CHECK(!sqlite3_open_v2(ROOT "/mnt/data/database.db", &db, 2, 0) &&
+          !sqlite3_exec(db, "insert into myfav(id,fileurl,time) values(99999,'/x',0)", 0, 0, 0));
+    sqlite3_close(db);
+    struct timeval later[2] = { { time(0) + 5, 0 }, { time(0) + 5, 0 } };
+    CHECK(!utimes(ROOT "/mnt/data/database.db", later));
     snprintf(c, sizeof c, "reroll\t%s", gen);
     ask(ROOT, &r, c);
     ask(ROOT, &r, "mix\tmost");
     CHECK(find(&r, first) < 0 && strcmp(r.f[0][4], gen));
+    for (int i = 0; i < nkept; ++i) CHECK(find(&r, kept_titles[i]) > 0);
     snprintf(c, sizeof c, "play\t%s", gen); /* the old mix's */
     ask(ROOT, &r, c);
     CHECK(!strcmp(r.head[2], "This Mixtape has changed"));
@@ -754,6 +771,8 @@ static void check_app(void) {
     snprintf(c, sizeof c, "mix\t%s", r.f[1][4]);
     ask(ROOT, &r, c);
     CHECK(!strncmp(r.f[0][3], "From Album 1499", 15));
+    ask(ROOT, &r, "search\tArtist 1"); /* 611 artists match, and their albums: half the page */
+    CHECK(r.rows == 50 && !strcmp(r.f[24][3], "Artist") && strcmp(r.f[25][3], "Artist"));
     ask(ROOT, &r, "search\tno such thing");
     CHECK(r.rows == 1 && !strcmp(r.f[0][0], "info"));
 
@@ -813,6 +832,7 @@ static void check_app(void) {
     CHECK(!strcmp(r.f[0][2], "Songs heard") && !strcmp(r.f[0][3], "40,000 of 50,000") &&
           find(&r, "Listen Now") >= 0);
     app_end(pid);
+    CHECK(access(ROOT "/tmp/q2-mixtape.play", 0)); /* stopped: never played again as new */
 
     /* older firmware: no words, no playing or saving through it */
     pid = app_start(ROOT, "");
@@ -927,6 +947,19 @@ static void check_scan(void) {
     profs_t p;
     CHECK(profs_open(&p) == 3);
     profs_close(&p);
+
+    /* the same song past ffmpeg's time: left for next time, the rest of the scan going on */
+    setenv("MIXTAPE_FFMPEG_MS", "1500", 1);
+    pid = app_start(SMALL, "");
+    unsetenv("MIXTAPE_FFMPEG_MS");
+    ask(SMALL, &r, "scanstart");
+    for (t = now_s(); find(&r, "Songs heard") < 0 && now_s() - t < 20; usleep(100000))
+        ask(SMALL, &r, "scan");
+    at = slurp(SMALL "/tmp/q2-mixtape.scan", 0);
+    CHECK(at && !strcmp(at, "end 0 1 0\n") && profs_open(&p) == 3);
+    free(at);
+    profs_close(&p);
+    app_end(pid);
 
     /* a newer Mixtape's file: kept as it is, and the page says why nothing was heard */
     size_t n;

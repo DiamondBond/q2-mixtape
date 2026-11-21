@@ -97,10 +97,15 @@ enum { MIX_MOST, MIX_FORGOTTEN, MIX_NEVER, MIX_DEEP, MIX_SHUFFLE, MIX_SOUND, MIX
 
 /* Paths: under MIXTAPE_ROOT on a computer (the checks), as they are on the Q2 otherwise. */
 const char *R(const char *path);
+#define PATH_ROOM 1200 /* a song's path (stock keeps 1 KiB) under the root, with ".tmp" */
 #define CARD "/mnt/mmc"
 #define APP_DIR CARD "/.mixtape"
 #define PROF_FILE APP_DIR "/profiles"
 #define DB_FILE "/mnt/data/database.db"
+#define DB_PAGE 500 /* rows a statement: db_page's queries say "limit 500" */
+#define SCAN_FILE "/tmp/q2-mixtape.scan"
+/* The scan's codes, the last line of SCAN_FILE: "end <heard> <to hear> <code>". */
+enum { END_OK, END_CARD, END_FFMPEG, END_LIBRARY, END_TERM, END_NEWER };
 /* The Library's music, as Q2 Pod's MUSIC_WHERE: no podcasts, audiobooks or .m4b books. And no
  * CUE image's tracks (a start or an end set): a playlist's line names a file, so the image's first
  * track would play instead. */
@@ -124,8 +129,6 @@ void db_close(void *db);
 int db_page(void *db, const char *sql, unsigned *last, int (*row)(void *, void *), void *ctx);
 void scope_load(void);
 int music(const char *path);
-int db_int(void *db, const char *sql);
-unsigned song_id(void *db, const char *path);
 const char *col_s(void *st, int i);
 int col_i(void *st, int i);
 int lib_load(int fresh);
@@ -135,6 +138,7 @@ const char *lib_str(unsigned off);
 int song_text(void *db, unsigned id, char *path, unsigned np, char *title, unsigned nt,
               char *artist, unsigned na);
 long long file_stamp(const char *path);
+int put_file(const char *path, const void *data, size_t n);
 void dur_open(void);
 void dur_close(void);
 int dur_sec(const char *path);
@@ -149,7 +153,7 @@ int mx_craft(song_t *v, int n, int *list, int seeded, int target);
 int mx_reroll(song_t *v, int n, int *list, int len, unsigned char *struck, int target);
 
 /* scan.c */
-int scan_main(void);
+int scan_main(int songs);
 int analyse(const char *path, int len, prof_t *p, short *pcm);
 
 /* net.c */

@@ -26,7 +26,6 @@
 #define PLAY "/tmp/q2-mixtape.play"
 #define PLAYING "/tmp/q2-mixtape.playing" /* the queue's song playing, from Q2 Pod */
 #define LIBRARY "/tmp/q2-mixtape.library"
-#define SCAN_FILE "/tmp/q2-mixtape.scan"
 #define QUEUE APP_DIR "/play.m3u"
 #define ACCOUNTS APP_DIR "/accounts"
 #define LENGTH APP_DIR "/length" /* the mixes' length in minutes */
@@ -108,19 +107,6 @@ static int has_cap(const char *word) {
     return !!strstr(caps, want);
 }
 
-/* path written whole: a temp beside it, then renamed over it. 1 when it was. */
-static int put_file(const char *path, const char *data, size_t n) {
-    char tmp[700];
-    snprintf(tmp, sizeof tmp, "%s.tmp", path);
-    FILE *f = fopen(tmp, "wb");
-    int ok = f && fwrite(data, 1, n, f) == n;
-    if (f && (fflush(f) || fsync(fileno(f)))) ok = 0;
-    if (f && fclose(f)) ok = 0;
-    if (ok && !rename(tmp, path)) return 1;
-    unlink(tmp);
-    return 0;
-}
-
 static const char *commas(int n, char *buf) {
     if (n >= 1000000)
         sprintf(buf, "%d,%03d,%03d", n / 1000000, n / 1000 % 1000, n % 1000);
@@ -175,13 +161,15 @@ static void scan_stop(void) {
     hold(0);
 }
 static void scan_start(void) {
+    char songs[16];
     if (scanner > 0) return;
+    snprintf(songs, sizeof songs, "%d", lib.n); /* for its count, the database left alone */
     unlink(R(SCAN_FILE));
     pid_t pid = fork();
     if (!pid) {
         /* none of the app's: the page's connection would stay open until the scan ends */
         for (int fd = 3; fd < 1024; ++fd) close(fd);
-        execl("/proc/self/exe", "q2-mixtape", "scan", (char *)0);
+        execl("/proc/self/exe", "q2-mixtape", "scan", songs, (char *)0);
         _exit(1);
     }
     if (pid > 0) scanner = pid, hold(1); /* standby would take the card from under it */
@@ -232,7 +220,8 @@ static struct {
     char key[48];   /* the mix op's argument: "most", "album 1a2b3c4d", "song 812", "lastfm" */
     char name[128]; /* what it is made from: "Most Played", an album's name */
     int kind, gen, libgen, len, seeded, pending;
-    int list[MX_MAX];
+    int list[MX_MAX];    /* into lib.v as read at libgen */
+    unsigned id[MX_MAX]; /* the songs' ids, which outlast a read */
     unsigned char struck[MX_MAX];
     struct {
         char path[1024], title[128], artist[128];
@@ -272,6 +261,7 @@ static void rows_fetch(void) {
     void *db = db_open();
     for (int i = 0; i < mx.len; ++i) {
         const song_t *s = &lib.v[mx.list[i]];
+        mx.id[i] = s->id;
         if (!song_text(db, s->id, mx.row[i].path, sizeof mx.row[i].path, mx.row[i].title,
                        sizeof mx.row[i].title, mx.row[i].artist, sizeof mx.row[i].artist))
             mx.row[i].path[0] = 0, snprintf(mx.row[i].title, sizeof mx.row[i].title, "Song gone");
@@ -288,17 +278,77 @@ static const group_t *group_of(const group_t *g, int n, unsigned hash) {
     return 0;
 }
 
+static int kind_of(const char *arg, unsigned *h) {
+    for (int i = 0; i < MIX_SOUND; ++i)
+        if (!strcmp(arg, COUNTS[i])) return i;
+    if (sscanf(arg, "album %x", h) == 1 || sscanf(arg, "artist %x", h) == 1 ||
+        sscanf(arg, "song %u", h) == 1)
+        return MIX_SOUND;
+    return !strcmp(arg, "listenbrainz") ? MIX_LB : !strcmp(arg, "lastfm") ? MIX_LASTFM : -1;
+}
+
+/* The library scored for mx.key's mix, and mx.name and mx.seeded set: 0, with mx.said, when it has
+ * nothing to make it from. */
+static int score(void) {
+    unsigned h = 0;
+    const char *arg = mx.key;
+    int kind = kind_of(arg, &h), n = lib.n, seeds = 0;
+    song_t *v = lib.v;
+    if (kind < MIX_SOUND) {
+        mx_counts(v, n, kind);
+        snprintf(mx.name, sizeof mx.name, "%s", COUNT_NAMES[kind]);
+    } else if (kind == MIX_SOUND) {
+        int album = arg[1] == 'l', song = arg[0] == 's', at = song ? lib_find(h) : -1;
+        for (int i = 0; i < n; ++i)
+            seeds += v[i].seed =
+                (unsigned char)(song    ? i == at
+                                : album ? v[i].album == h
+                                        : v[i].artist == h || v[i].album_artist == h);
+        const group_t *g = album  ? group_of(lib.albums, lib.nalbums, h)
+                           : song ? 0
+                                  : group_of(lib.artists, lib.nartists, h);
+        if (song && at >= 0) {
+            char path[1024], artist[128];
+            void *db = db_open();
+            if (!song_text(db, h, path, sizeof path, mx.name, sizeof mx.name, artist,
+                           sizeof artist))
+                mx.name[0] = 0;
+            if (db) db_close(db);
+        } else if (g)
+            snprintf(mx.name, sizeof mx.name, "%s", lib_str(g->name));
+        if (!seeds) {
+            snprintf(mx.said, sizeof mx.said,
+                     song    ? "That song isn't in the Library now"
+                     : album ? "That album isn't in the Library now"
+                             : "That artist isn't in the Library now");
+            return 0;
+        }
+        mx_rank(v, n);
+        mx.seeded = !song;
+    } else {
+        snprintf(mx.name, sizeof mx.name, "%s",
+                 kind == MIX_LB ? "ListenBrainz Picks" : "Last.fm Similar Artists");
+        mx_items(v, n, mx.net.v, mx.net.n, kind);
+    }
+    mx.libgen = lib.gen;
+    return 1;
+}
+
+/* The mix's songs found again in a library read since it was made, scored afresh for a re-roll.
+ * 0 when one has gone. ponytail: songs struck before the read may be offered again. */
+static int relink(void) {
+    if (!score()) return 0;
+    for (int i = 0; i < mx.len; ++i)
+        if ((mx.list[i] = lib_find(mx.id[i])) < 0) return 0;
+    for (int i = 0; i < mx.len; ++i) lib.v[mx.list[i]].flags = MX_USED;
+    return 1;
+}
+
 /* The mix for arg made anew into mx: Last.fm's and ListenBrainz's asked for first, unless again
  * (a re-roll's), which makes it from what they said last time. */
 static void craft(const char *arg, int again) {
     unsigned h = 0;
-    int kind = -1, lb = !strcmp(arg, "listenbrainz");
-    for (int i = 0; i < MIX_SOUND; ++i)
-        if (!strcmp(arg, COUNTS[i])) kind = i;
-    if (sscanf(arg, "album %x", &h) == 1 || sscanf(arg, "artist %x", &h) == 1 ||
-        sscanf(arg, "song %u", &h) == 1)
-        kind = MIX_SOUND;
-    if (lb || !strcmp(arg, "lastfm")) kind = lb ? MIX_LB : MIX_LASTFM;
+    int kind = kind_of(arg, &h), lb = kind == MIX_LB;
     snprintf(mx.key, sizeof mx.key, "%s", arg);
     mx.kind = kind, mx.len = mx.seeded = mx.pending = 0, mx.said[0] = mx.name[0] = 0, ++mx.gen;
     memset(mx.struck, 0, sizeof mx.struck);
@@ -328,45 +378,9 @@ static void craft(const char *arg, int again) {
         snprintf(mx.said, sizeof mx.said, "No Library yet: run Update Library");
         return;
     }
-    mx.libgen = lib.gen;
+    if (!score()) return;
     song_t *v = lib.v;
-    int n = lib.n, seeds = 0;
-    if (kind < MIX_SOUND) {
-        mx_counts(v, n, kind);
-        snprintf(mx.name, sizeof mx.name, "%s", COUNT_NAMES[kind]);
-    } else if (kind == MIX_SOUND) {
-        int album = arg[1] == 'l', song = arg[0] == 's', at = song ? lib_find(h) : -1;
-        for (int i = 0; i < n; ++i)
-            seeds += v[i].seed =
-                (unsigned char)(song    ? i == at
-                                : album ? v[i].album == h
-                                        : v[i].artist == h || v[i].album_artist == h);
-        const group_t *g = album  ? group_of(lib.albums, lib.nalbums, h)
-                           : song ? 0
-                                  : group_of(lib.artists, lib.nartists, h);
-        if (song && at >= 0) {
-            char path[1024], artist[128];
-            void *db = db_open();
-            if (!song_text(db, h, path, sizeof path, mx.name, sizeof mx.name, artist,
-                           sizeof artist))
-                mx.name[0] = 0;
-            if (db) db_close(db);
-        } else if (g)
-            snprintf(mx.name, sizeof mx.name, "%s", lib_str(g->name));
-        if (!seeds) {
-            snprintf(mx.said, sizeof mx.said,
-                     song    ? "That song isn't in the Library now"
-                     : album ? "That album isn't in the Library now"
-                             : "That artist isn't in the Library now");
-            return;
-        }
-        mx_rank(v, n);
-        mx.seeded = !song;
-    } else {
-        snprintf(mx.name, sizeof mx.name, "%s",
-                 lb ? "ListenBrainz Picks" : "Last.fm Similar Artists");
-        mx_items(v, n, mx.net.v, mx.net.n, kind);
-    }
+    int n = lib.n;
     int target = length_min * 60, secs = 0;
     mx.len = mx_craft(v, n, mx.list, mx.seeded, target);
     for (int i = 0; i < mx.len; ++i) secs += MX_SECS(v[mx.list[i]].sec);
@@ -436,7 +450,7 @@ static void mix_rows(rep_t *r) {
             ctx);
     }
     /* the best not found, in order */
-    for (int k = 0; k < FIND_ROWS && mx.kind >= MIX_LASTFM; ++k) {
+    for (int k = 0; k < FIND_ROWS && r->count < ROWS && mx.kind >= MIX_LASTFM; ++k) {
         int best = -1;
         for (int i = 0; i < mx.net.n; ++i) {
             const item_t *it = &mx.net.v[i];
@@ -452,11 +466,12 @@ static void mix_rows(rep_t *r) {
     }
     for (int i = 0; i < mx.net.n; ++i)
         if (mx.net.v[i].matched == 2) mx.net.v[i].matched = 0;
-    snprintf(r->msg, sizeof r->msg, "refresh"); /* a strike's mark moves at once */
+    if (mx.len) snprintf(r->msg, sizeof r->msg, "refresh"); /* a strike's mark moves at once */
 }
 
+/* A mix that couldn't be made (no link yet, a library update) is tried again at each open. */
 static void page_mix(rep_t *r, const char *arg) {
-    if (strcmp(mx.key, arg) || (mx.pending && nw.done)) craft(arg, 0);
+    if (strcmp(mx.key, arg) || (mx.pending && nw.done) || (!mx.len && !mx.pending)) craft(arg, 0);
     if (mx.pending) {
         info(r,
              mx.kind == MIX_LB ? "Asking ListenBrainz\xe2\x80\xa6" : "Asking Last.fm\xe2\x80\xa6",
@@ -520,7 +535,7 @@ static void act_reroll(rep_t *r, const char *ctx) {
     }
     char key[sizeof mx.key];
     snprintf(key, sizeof key, "%s", mx.key);
-    if (lib_load(0) && lib.gen == mx.libgen && !mx.pending) {
+    if (lib_load(0) && !mx.pending && (lib.gen == mx.libgen || relink())) {
         int len = mx_reroll(lib.v, lib.n, mx.list, mx.len, mx.struck, length_min * 60);
         if (len) {
             mx.len = len, ++mx.gen;
@@ -528,7 +543,7 @@ static void act_reroll(rep_t *r, const char *ctx) {
             return;
         }
     }
-    craft(key, 1); /* the library changed under it, or nothing else fit: a new one */
+    craft(key, 1); /* a song gone from the library, or nothing else fit: a new one */
 }
 
 /* A playlist's name from the mix's: "<name> Mixtape <date>", at most 63 bytes (stock's limit),
@@ -597,8 +612,11 @@ static void act_save(rep_t *r, const char *ctx) {
         k += carried(line + k, sizeof line - k - sizeof file - 8);
         k += (size_t)snprintf(line + k, sizeof line - k, "add %s\n", file);
         if (put_file(R(LIBRARY), line, k))
-            snprintf(r->msg, sizeof r->msg,
-                     "\xe2\x80\x9c%.60s\xe2\x80\x9d joins Playlists once nothing plays", name);
+            snprintf(
+                r->msg, sizeof r->msg,
+                "\xe2\x80\x9c%.44s\xe2\x80\x9d joins Playlists once nothing plays and you've left "
+                "the Library",
+                name);
         else
             snprintf(r->msg, sizeof r->msg, "Can't ask Q2 Pod to add it");
     }
@@ -676,7 +694,11 @@ static void page_search(rep_t *r, const char *text) {
         return;
     }
     char c[24];
-    for (int i = 0; i < lib.nartists && r->count < ROWS; ++i)
+    int albums = 0; /* artists leave them half the page */
+    for (int i = 0; i < lib.nalbums && albums < ROWS / 2; ++i)
+        albums += strcasestr(lib_str(lib.albums[i].name), text) ||
+                  strcasestr(lib_str(lib.albums[i].artist), text);
+    for (int i = 0; i < lib.nartists && r->count < ROWS - albums; ++i)
         if (strcasestr(lib_str(lib.artists[i].name), text))
             snprintf(c, sizeof c, "artist %08x", lib.artists[i].hash),
                 row(r, "list", "mix", lib_str(lib.artists[i].name), "Artist", c);
@@ -717,16 +739,14 @@ static void page_scan(rep_t *r) {
         return;
     }
     int heard = 0, n = lib_load(1);
-    for (int i = 0; i < n; ++i) heard += lib.v[i].prof != 0;
+    for (int i = 0; i < n; ++i) heard += profs_find(&lib.profs, lib.v[i].pkey) != 0; /* or tried */
     snprintf(sub, sizeof sub, "%s of %s", commas(heard, a), commas(n, b));
     info(r, "Songs heard", sub);
-    static const char *const ENDS[] = { 0,
-                                        "Stopped: the card went away",
-                                        "Stopped: this Q2 has no ffmpeg",
-                                        "Stopped: the Library was updating",
-                                        0,
-                                        "Stopped: update Mixtape first" };
-    if (ok && !strcmp(s.phase, "end") && s.left > 0 && s.left < 6 && ENDS[s.left])
+    static const char *const ENDS[] = { [END_CARD] = "Stopped: the card went away",
+                                        [END_FFMPEG] = "Stopped: this Q2 has no ffmpeg",
+                                        [END_LIBRARY] = "Stopped: the Library was updating",
+                                        [END_NEWER] = "Stopped: update Mixtape first" };
+    if (ok && !strcmp(s.phase, "end") && s.left > 0 && s.left <= END_NEWER && ENDS[s.left])
         info(r, ENDS[s.left], "");
     if (n)
         row(r, "action", "scanstart", heard < n ? "Listen Now" : "Listen for New Songs",
@@ -759,12 +779,17 @@ static void page_more(rep_t *r) {
     FILE *f = fopen(R(PLAYING), "rb");
     if (f && fgets(path, sizeof path, f)) path[strcspn(path, "\r\n")] = 0;
     if (f) fclose(f);
-    void *db = path[0] && lib_load(0) ? db_open() : 0;
-    unsigned id = song_id(db, path);
-    int at = id ? lib_find(id) : -1;
+    int at = -1;
+    if (path[0] && lib_load(0)) { /* by its key in memory: songtable has no index on paths */
+        unsigned long long key = prof_key(path);
+        for (int i = 0; i < lib.n && at < 0; ++i)
+            if (lib.v[i].pkey == key) at = i;
+    }
+    unsigned id = at >= 0 ? lib.v[at].id : 0;
     char title[128] = "", artist[128] = "", p[1024];
-    if (at >= 0) song_text(db, id, p, sizeof p, title, sizeof title, artist, sizeof artist);
-    if (db) db_close(db);
+    void *db = at >= 0 ? db_open() : 0;
+    if (db)
+        song_text(db, id, p, sizeof p, title, sizeof title, artist, sizeof artist), db_close(db);
     if (at < 0) {
         info(r, "Nothing from the Library is playing", "");
         return;
@@ -916,5 +941,8 @@ int serve(void) {
     close(s);
     unlink(addr.sun_path);
     unlink(R(STATE));
+    /* stopped, not idle: Q2 Pod, started again (a crash, back from Rockbox), would play a .play
+     * left behind as a new one. Idle, it stays: Now Playing's More Like This needs .playing. */
+    if (quit) unlink(R(PLAY));
     return 0;
 }

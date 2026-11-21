@@ -5,6 +5,7 @@
 #include "mixtape.h"
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,13 +17,15 @@
 #include <time.h>
 #include <unistd.h>
 
-#define SCAN_FILE "/tmp/q2-mixtape.scan"
 #define COMPACT_SLACK 1000 /* stale records the file may carry before it is written afresh */
 #ifdef HOST
 #define FFMPEG "ffmpeg"
 #else
 #define FFMPEG "/usr/bin/ffmpeg" /* the Q2's own, 4.2 */
 #endif
+/* ffmpeg's time for one song; a song it is still on (a damaged file, a card that stalls) is left
+ * for next time. Not marked unheard: at nice 19 under playback a slow song isn't a bad one. */
+#define FFMPEG_MS 120000
 
 static volatile sig_atomic_t quit;
 static volatile pid_t child;
@@ -32,11 +35,21 @@ static void on_term(int sig) {
     if (child > 0) kill(child, SIGKILL);
 }
 
+static long long now_ms(void) {
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (long long)t.tv_sec * 1000 + t.tv_nsec / 1000000;
+}
+
 /* ffmpeg with args, its stdout (out) or stderr read into buf; the bytes read, -1 when it was
- * killed (by a TERM here, or for memory) and -2 when there is no ffmpeg. One that crashed on a
- * file counts as done: what it gave is all there is. */
+ * killed (by a TERM here, for memory, or past FFMPEG_MS) and -2 when there is no ffmpeg. One that
+ * crashed on a file counts as done: what it gave is all there is. */
 static int run(char **args, int out, char *buf, int size) {
     int fd[2], n = 0, status = 0;
+    long long end = now_ms() + FFMPEG_MS;
+#ifdef HOST /* the checks wait seconds, not minutes */
+    if (getenv("MIXTAPE_FFMPEG_MS")) end = now_ms() + atoi(getenv("MIXTAPE_FFMPEG_MS"));
+#endif
     if (pipe(fd)) return -1;
     pid_t pid = fork();
     if (!pid) {
@@ -49,12 +62,19 @@ static int run(char **args, int out, char *buf, int size) {
     close(fd[1]);
     child = pid;
     if (quit && pid > 0) kill(pid, SIGKILL); /* a TERM before child was set */
-    for (int got;
-         pid > 0 && n < size && (got = (int)read(fd[0], buf + n, (size_t)(size - n))) != 0;)
+    for (int got; pid > 0 && n < size;) {
+        struct pollfd p = { fd[0], POLLIN, 0 };
+        long long left = end - now_ms();
+        if (left <= 0 || !(got = poll(&p, 1, (int)left))) {
+            kill(pid, SIGKILL);
+            break;
+        }
+        if (got > 0 && !(got = (int)read(fd[0], buf + n, (size_t)(size - n)))) break;
         if (got > 0)
             n += got;
         else if (errno != EINTR)
             break;
+    }
     close(fd[0]);
     while (pid > 0 && waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
     child = 0;
@@ -96,45 +116,43 @@ int analyse(const char *path, int len, prof_t *p, short *pcm) {
 }
 
 static void say(const char *phase, int done, int total, long left) {
-    char line[96], tmp[640];
+    char line[96];
     int n = snprintf(line, sizeof line, "%s %d %d %ld\n", phase, done, total, left);
-    snprintf(tmp, sizeof tmp, "%s.tmp", R(SCAN_FILE));
-    FILE *f = fopen(tmp, "wb");
-    if (f && fwrite(line, (size_t)n, 1, f) == 1 && !fclose(f))
-        rename(tmp, R(SCAN_FILE));
-    else if (f)
-        fclose(f);
+    put_file(R(SCAN_FILE), line, (size_t)n);
 }
 
-static long long now_ms(void) {
-    struct timespec t;
-    clock_gettime(CLOCK_MONOTONIC, &t);
-    return (long long)t.tv_sec * 1000 + t.tv_nsec / 1000000;
-}
-
+/* The songs to hear. The database is read a page into memory before the card is looked at, so
+ * stock's writes (a heart, a play) never wait on the card, as they give up after 500 ms. */
 typedef struct {
-    profs_t *profs;
-    unsigned *todo;
-    int n, done, total, cap;
+    unsigned *todo, id[DB_PAGE];
+    char *path[DB_PAGE];
+    int n, cap, got, done, total;
 } check_t;
 static int check_row(void *ctx, void *st) {
     check_t *c = ctx;
     const char *path = col_s(st, 1);
-    struct stat s;
     if (quit) return 1;
     if (!music(path)) return 0;
-    if (!(++c->done % 200)) say("check", c->done, c->total, -1);
-    if (stat(R(path), &s)) return 0; /* gone: nothing to hear */
-    const prof_t *p = profs_find(c->profs, prof_key(path));
-    if (p && p->size == (unsigned)s.st_size) return 0;
-    if (c->n == c->cap) {
-        int cap = c->cap ? 2 * c->cap : 1024;
-        unsigned *v = realloc(c->todo, (size_t)cap * sizeof *v);
-        if (!v) return 1;
-        c->todo = v, c->cap = cap;
+    if (!(c->path[c->got] = strdup(path))) return 1;
+    c->id[c->got++] = (unsigned)col_i(st, 0);
+    return c->got == DB_PAGE;
+}
+static void check_page(check_t *c, const profs_t *profs) {
+    for (int i = 0; i < c->got; ++i) {
+        struct stat s;
+        const prof_t *p = 0;
+        if (!(++c->done % 200)) say("check", c->done, c->total, -1);
+        if (!quit && !stat(R(c->path[i]), &s) && /* gone: nothing to hear */
+            !((p = profs_find(profs, prof_key(c->path[i]))) && p->size == (unsigned)s.st_size)) {
+            if (c->n == c->cap) {
+                int cap = c->cap ? 2 * c->cap : 1024;
+                unsigned *v = realloc(c->todo, (size_t)cap * sizeof *v);
+                if (v) c->todo = v, c->cap = cap;
+            }
+            if (c->n < c->cap) c->todo[c->n++] = c->id[i];
+        }
+        free(c->path[i]);
     }
-    c->todo[c->n++] = (unsigned)col_i(st, 0);
-    return 0;
 }
 static int song_row(void *ctx, void *st) {
     snprintf(ctx, 1024, "%s", col_s(st, 1));
@@ -184,10 +202,8 @@ static void compact(void) {
     if (f && !(ok && !rename(tmp, R(PROF_FILE)))) unlink(tmp);
 }
 
-/* The scan's codes, the last line of SCAN_FILE: "end <heard> <to hear> <code>". */
-enum { END_OK, END_CARD, END_FFMPEG, END_LIBRARY, END_TERM, END_NEWER };
-
-int scan_main(void) {
+/* songs: the Library's, for the progress. */
+int scan_main(int songs) {
     struct sigaction sa = { 0 };
     sa.sa_handler = on_term;
     sigaction(SIGTERM, &sa, 0);
@@ -208,13 +224,18 @@ int scan_main(void) {
     scope_load(); /* the folder markers, as the Library has them */
     profs_t profs;
     profs_open(&profs);
-    check_t c = {
-        &profs, 0, 0, 0, db_int(db, "select count(*) from songtable where " MUSIC_SQL), 0
-    };
+    static check_t c;
+    c.total = songs;
     unsigned last = 0;
-    int got = db_page(
-        db, "select id,fileurl from songtable where id>? and " MUSIC_SQL " order by id limit 500",
-        &last, check_row, &c);
+    int got;
+    do {
+        c.got = 0;
+        got = db_page(db,
+                      "select id,fileurl from songtable where id>? and " MUSIC_SQL
+                      " order by id limit 500",
+                      &last, check_row, &c);
+        check_page(&c, &profs);
+    } while (got >= 0 && c.got == DB_PAGE && !quit);
     profs_close(&profs);
     int fd = got >= 0 && !quit ? append_open() : -1, heard = 0;
     int code = quit       ? END_TERM
@@ -232,9 +253,11 @@ int scan_main(void) {
         unsigned at = c.todo[i] - 1;
         struct stat st;
         if (db_page(db, "select id,fileurl from songtable where id>? order by id limit 1", &at,
-                    song_row, path) < 0 ||
-            at != c.todo[i] || stat(R(path), &st))
-            continue; /* gone since */
+                    song_row, path) < 0) {
+            code = END_LIBRARY; /* an Update Library under it */
+            break;
+        }
+        if (at != c.todo[i] || stat(R(path), &st)) continue; /* gone since */
         int r = analyse(R(path), dur_sec(path), &p, pcm);
         if (r == -2) {
             code = END_FFMPEG;

@@ -34,17 +34,29 @@ int sqlite3_finalize(sqlite3_stmt *);
 #define SCOPE_FILE "/mnt/data/q2-library-scope"              /* "0/path" hidden, "1/path" shown */
 #define PLAYS_SLOTS 512
 #define RATE_SLOTS 4096
-#define DB_PAGE 500
 
 lib_t lib;
 
 const char *R(const char *path) {
-    static char buf[8][640];
+    static char buf[8][PATH_ROOM];
     static unsigned k;
     const char *root = getenv("MIXTAPE_ROOT");
     char *b = buf[k++ & 7];
     snprintf(b, sizeof *buf, "%s%s", root ? root : "", path);
     return b;
+}
+
+/* path written whole: a temp beside it, then renamed over it. 1 when it was. */
+int put_file(const char *path, const void *data, size_t n) {
+    char tmp[PATH_ROOM + 8];
+    snprintf(tmp, sizeof tmp, "%s.tmp", path);
+    FILE *f = fopen(tmp, "wb");
+    int ok = f && fwrite(data, 1, n, f) == n;
+    if (f && (fflush(f) || fsync(fileno(f)))) ok = 0;
+    if (f && fclose(f)) ok = 0;
+    if (ok && !rename(tmp, path)) return 1;
+    unlink(tmp);
+    return 0;
 }
 
 long long file_stamp(const char *path) {
@@ -251,29 +263,6 @@ int db_page(void *db, const char *sql, unsigned *last, int (*row)(void *, void *
         total += got;
     } while (got == DB_PAGE);
     return total;
-}
-
-/* sql's one number; 0 when it has none. */
-int db_int(void *db, const char *sql) {
-    sqlite3_stmt *st;
-    int n = 0;
-    if (sqlite3_prepare_v2(db, sql, -1, &st, 0)) return 0;
-    if (sqlite3_step(st) == 100) n = col_i(st, 0);
-    sqlite3_finalize(st);
-    return n;
-}
-
-/* The id of the first song at path (a CUE image's first track); 0 for none. */
-unsigned song_id(void *db, const char *path) {
-    sqlite3_stmt *st;
-    unsigned id = 0;
-    if (!db || sqlite3_prepare_v2(
-                   db, "select id from songtable where fileurl=? order by id limit 1", -1, &st, 0))
-        return 0;
-    sqlite3_bind_text(st, 1, path, -1, (void (*)(void *))-1); /* SQLITE_TRANSIENT */
-    if (sqlite3_step(st) == 100) id = (unsigned)col_i(st, 0);
-    sqlite3_finalize(st);
-    return id;
 }
 
 /* What a song shows: its title (the file's name without one) and artist, and its path. 0 when it
