@@ -4,15 +4,12 @@
  * an .m3u, Save as Playlist to its Library update. Last.fm and ListenBrainz are asked on a
  * worker thread while the page says so; listening is a child process (scan.c). */
 #include "mixtape.h"
-#include <errno.h>
-#include <fcntl.h>
 #include <poll.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <strings.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
@@ -399,13 +396,6 @@ static void craft(const char *arg, int again) {
     rows_fetch();
 }
 
-static void time_text(char *o, int sec) {
-    if (sec > 0)
-        sprintf(o, "%d:%02d", sec / 60, sec % 60);
-    else
-        o[0] = 0;
-}
-
 /* The mix's page: Play, its songs (Centre strikes one), Re-roll and Save, then what Last.fm or
  * ListenBrainz recommends that isn't on the card. */
 static void mix_rows(rep_t *r) {
@@ -429,7 +419,9 @@ static void mix_rows(rep_t *r) {
     for (int i = 0; i < mx.len; ++i) {
         char c[32];
         snprintf(c, sizeof c, "%d %d", mx.gen, i);
-        time_text(t, mx.row[i].sec);
+        t[0] = 0;
+        if (mx.row[i].sec > 0)
+            snprintf(t, sizeof t, "%d:%02d", mx.row[i].sec / 60, mx.row[i].sec % 60);
         if (mx.struck[i])
             snprintf(sub, sizeof sub, "Struck \xc2\xb7 Re-roll replaces it");
         else if (!mx.row[i].path[0])
@@ -485,35 +477,46 @@ static void page_mix(rep_t *r, const char *arg) {
 /* An action's mix: ctx's gen is the mix's own. */
 static int ours(const char *ctx) { return atoi(ctx) == mx.gen && mx.len && !mx.pending; }
 
-static int queue_text(char **out) {
-    size_t cap = 4 + (size_t)mx.len * (sizeof mx.row[0].path + 1), n = 3;
-    char *t = malloc(cap);
-    if (!t) return -1;
+/* A request's stamp for Q2 Pod, new each time: the time and a count. */
+static int stamp(char *o, size_t room) {
+    static unsigned seq;
+    return snprintf(o, room, "%lx%u", (unsigned long)time(0), ++seq);
+}
+
+/* ctx's mix as an .m3u into *out (freed by the caller): its length, or 0 with r's message saying
+ * why there is none. */
+static int queue_text(rep_t *r, const char *ctx, char **out) {
+    size_t n = 3;
+    char *t = *out = ours(ctx) ? malloc(4 + (size_t)mx.len * (sizeof mx.row[0].path + 1)) : 0;
+    if (!t) {
+        snprintf(r->msg, sizeof r->msg,
+                 ours(ctx) ? "Not enough memory" : "This Mixtape has changed");
+        return 0;
+    }
     memcpy(t, "\xef\xbb\xbf", 3); /* UTF-8, as stock's playlist import reads it (no sniffing) */
-    int songs = 0;
     for (int i = 0; i < mx.len; ++i) {
         char *p = mx.row[i].path;
         if (p[0] && access(R(p), 0)) p[0] = 0; /* gone since: Q2 Pod's queue would wait on it */
-        if (!mx.struck[i] && p[0]) n += (size_t)sprintf(t + n, "%s\n", p), ++songs;
+        if (!mx.struck[i] && p[0]) n += (size_t)sprintf(t + n, "%s\n", p);
     }
-    *out = t;
-    return (int)n * !!songs;
+    if (n == 3) snprintf(r->msg, sizeof r->msg, "Every song is struck or not on the card");
+    return n == 3 ? 0 : (int)n;
 }
 
 static void act_play(rep_t *r, const char *ctx) {
-    char *t = 0, line[256];
-    int n = ours(ctx) ? queue_text(&t) : -2;
-    if (n < 0)
-        snprintf(r->msg, sizeof r->msg, n == -2 ? "This Mixtape has changed" : "Not enough memory");
-    else if (!n)
-        snprintf(r->msg, sizeof r->msg, "Every song is struck or not on the card");
-    else if (!has_cap("playlist"))
+    char *t, line[256];
+    int n = queue_text(r, ctx, &t);
+    if (!n) {
+        free(t);
+        return;
+    }
+    if (!has_cap("playlist"))
         snprintf(r->msg, sizeof r->msg, "Update Q2 Pod to play a Mixtape");
     else if (mkdir(R(APP_DIR), 0755), !put_file(R(QUEUE), t, (size_t)n))
         snprintf(r->msg, sizeof r->msg, "Can't write to the card");
     else {
-        static unsigned seq;
-        int k = snprintf(line, sizeof line, "%lx%u %s\n", (unsigned long)time(0), ++seq, QUEUE);
+        int k = stamp(line, sizeof line);
+        k += snprintf(line + k, sizeof line - (size_t)k, " %s\n", QUEUE);
         if (!put_file(R(PLAY), line, (size_t)k))
             snprintf(r->msg, sizeof r->msg, "Can't start the Mixtape");
     }
@@ -591,24 +594,22 @@ static size_t carried(char *out, size_t room) {
 }
 
 static void act_save(rep_t *r, const char *ctx) {
-    char *t = 0, name[100], file[200], line[8704];
-    int n = ours(ctx) ? queue_text(&t) : -2;
-    if (n < 0) {
-        snprintf(r->msg, sizeof r->msg, n == -2 ? "This Mixtape has changed" : "Not enough memory");
+    char *t, name[100], file[200], line[8704];
+    int n = queue_text(r, ctx, &t);
+    if (!n) {
+        free(t);
         return;
     }
     playlist_name(name, sizeof name, file, sizeof file);
     mkdir(R(PLAYLISTS), 0755);
-    if (!n)
-        snprintf(r->msg, sizeof r->msg, "Every song is struck or not on the card");
-    else if (!put_file(R(file), t, (size_t)n))
+    if (!put_file(R(file), t, (size_t)n))
         snprintf(r->msg, sizeof r->msg, "Can't write to the card");
     else if (!has_cap("library"))
         snprintf(r->msg, sizeof r->msg,
                  "Saved: Import Playlists adds \xe2\x80\x9c%.60s\xe2\x80\x9d", name);
     else {
-        static unsigned seq;
-        size_t k = (size_t)snprintf(line, sizeof line, "%lx%u\n", (unsigned long)time(0), ++seq);
+        size_t k = (size_t)stamp(line, sizeof line);
+        line[k++] = '\n';
         k += carried(line + k, sizeof line - k - sizeof file - 8);
         k += (size_t)snprintf(line + k, sizeof line - k, "add %s\n", file);
         if (put_file(R(LIBRARY), line, k))

@@ -1,7 +1,6 @@
-/* Hearing and choosing, from the firmware Mixtape that Q2 Pod carried in 1.3 (d0f1fbb2's
- * patch/mixtape.c): each song's clip turned into MFCCs, every song scored against the seed's
- * (an album's, an artist's or a song's) or by its plays and hearts, and about 45 minutes filled
- * under a few variety rules; then struck songs re-rolled. */
+/* Hearing and choosing: each song's clip turned into MFCCs, every song scored against the seed's
+ * (an album's, an artist's or a song's), by its plays and hearts or at random, and the mix's
+ * length filled under a few variety rules; then struck songs re-rolled. */
 #include "mixtape.h"
 #include <math.h>
 #include <stdlib.h>
@@ -12,7 +11,7 @@
 #define MX_REFS 32 /* a seed's tracks a song is measured against, at most */
 #define RECENT 100 /* Q2 Pod's newest play counts: what was played lately */
 
-unsigned rnd(unsigned n) {
+static unsigned rnd(unsigned n) {
     static unsigned x;
     if (!x) x = ((unsigned)time(0) ^ (unsigned)getpid() << 16) | 1;
     x ^= x << 13, x ^= x >> 17, x ^= x << 5;
@@ -275,7 +274,7 @@ static int by_item_artist(const void *a, const void *b) {
     unsigned x = ((const item_t *)a)->artist[0], y = ((const item_t *)b)->artist[0];
     return (x > y) - (x < y);
 }
-/* The first item at key in items sorted by cmp's field, -1 for none. */
+/* The first item at key in items sorted by title (with title) or first artist, -1 for none. */
 static int first(item_t *items, int ni, unsigned key, int title) {
     int lo = 0, hi = ni;
     while (lo < hi) {

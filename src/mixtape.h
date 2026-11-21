@@ -114,13 +114,10 @@ enum { END_OK, END_CARD, END_FFMPEG, END_LIBRARY, END_TERM, END_NEWER };
     "fileurl not like '%.m4b' and ifnull(time, 0) <= 0 and ifnull(time_end, 0) <= 0"
 
 /* lib.c */
-unsigned fnv32(unsigned h, const char *s);
 unsigned long long prof_key(const char *path);
-unsigned listen_key(const char *path, int cue);
+unsigned listen_key(const char *path);
 unsigned album_ident(const char *album, const char *album_artist, const char *path);
 unsigned norm_hash(const char *s, int title);
-unsigned lower_hash(const char *s, unsigned n);
-void genres(const char *s, unsigned *g);
 int profs_open(profs_t *p);
 void profs_close(profs_t *p);
 const prof_t *profs_find(const profs_t *p, unsigned long long key);
@@ -137,14 +134,12 @@ int lib_find(unsigned id);
 const char *lib_str(unsigned off);
 int song_text(void *db, unsigned id, char *path, unsigned np, char *title, unsigned nt,
               char *artist, unsigned na);
-long long file_stamp(const char *path);
 int put_file(const char *path, const void *data, size_t n);
 void dur_open(void);
 void dur_close(void);
 int dur_sec(const char *path);
 
 /* mix.c */
-unsigned rnd(unsigned n);
 int mx_features(const short *pcm, int n, float *out);
 void mx_rank(song_t *v, int n);
 void mx_counts(song_t *v, int n, int kind);

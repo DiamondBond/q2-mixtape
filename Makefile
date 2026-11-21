@@ -15,7 +15,7 @@ DIST = dist/.mixtape
 DEVLIBS = build/rootfs/usr/lib/libcurl.so.4 build/rootfs/usr/lib/libsqlite3.so.0
 HOST_CFLAGS = -std=gnu11 -O1 -g -Wall -Wextra -Wno-unused-parameter -D_GNU_SOURCE -DHOST -fsanitize=address,undefined
 
-all: $(DIST)/q2-mixtape $(DIST)/q2app $(DIST)/run dist/mixtape.zip
+all: dist/mixtape.zip
 
 $(DEVLIBS):
 	@test -f "$(ROOTFS)" || { echo "No rootfs: make ROOTFS=path/to/rootfs.squashfs (a Q2 Pod build's)"; exit 1; }
@@ -51,7 +51,8 @@ dist/mixtape.zip: $(DIST)/q2-mixtape $(DIST)/q2app $(DIST)/run
 	cd dist && rm -f mixtape.zip && zip -qX mixtape.zip .mixtape/q2app .mixtape/run .mixtape/q2-mixtape
 	@ls -l $@
 
-# The host build: the app itself (the parity check runs its scan path) and the checks.
+# The host build: the app itself (the checks start it, over its socket and for its scan) and the
+# checks.
 build/host/q2-mixtape: $(SRC) src/mixtape.h
 	@mkdir -p build/host
 	cc $(HOST_CFLAGS) -o $@ $(SRC) -lsqlite3 -lcurl -lm -lpthread

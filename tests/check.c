@@ -1,10 +1,9 @@
 /* Mixtape's host checks (make check, under ASan and UBSan): the JSON walker, the name matching,
  * the features, a synthetic 50,000-song library through every mix and the variety rules, and the
  * app itself over its socket, listening included. With arguments, it is the parity check's C side
- * (tests/parity.py): "analyse FILE", "features RAW", "keys PATH CUE ALBUM ALBUM_ARTIST" and
+ * (tests/parity.py): "analyse FILE", "features RAW", "key PATH" and
  * "lookup CARD RELPATH". */
 #include "mixtape.h"
-#include <assert.h>
 #include <fcntl.h>
 #include <math.h>
 #include <signal.h>
@@ -235,20 +234,19 @@ static void make_library(void) {
     } plays[512];
     for (int i = 0; i < 512; ++i) {
         song_path(path, sizeof path, 100 + i);
-        plays[i].key = listen_key(path, 0), plays[i].n = (unsigned)(600 - i);
+        plays[i].key = listen_key(path), plays[i].n = (unsigned)(600 - i);
     }
     put(ROOT "/mnt/data/ringnav-plays", plays, sizeof plays);
     unsigned rates[4096] = { 0 }, arates[4096] = { 0 };
     for (int i = 0; i < 300; ++i) {
         song_path(path, sizeof path, 2000 + i);
-        rates[i] = (listen_key(path, 0) & ~7u) | (unsigned)(i % 4 + 1);
+        rates[i] = (listen_key(path) & ~7u) | (unsigned)(i % 4 + 1);
     }
     put(ROOT "/mnt/data/ringnav-ratings", rates, sizeof rates);
     for (int a = 0; a < 50; ++a) {
-        char album[32], art[32];
+        char album[32];
         song_path(path, sizeof path, a * 10);
-        snprintf(album, sizeof album, "Album %d", a),
-            snprintf(art, sizeof art, "Artist %d", a % 1500);
+        snprintf(album, sizeof album, "Album %d", a);
         arates[a] = (album_ident(album, "", path) & ~7u) | 5;
     }
     put(ROOT "/mnt/data/ringnav-album-ratings", arates, sizeof arates);
@@ -583,7 +581,7 @@ static void unesc(char *s) {
     *o = 0;
 }
 static void ask(const char *root, reply_t *r, const char *line) {
-    char path[256], req[2048];
+    char req[2048];
     struct sockaddr_un a = { AF_UNIX, "" };
     snprintf(a.sun_path, sizeof a.sun_path, "%s/tmp/q2-mixtape.browse.sock", root);
     int fd = -1;
@@ -604,7 +602,6 @@ static void ask(const char *root, reply_t *r, const char *line) {
     while ((got = (int)read(fd, r->buf + k, 69999 - (size_t)k)) > 0) k += got;
     CHECK(!got); /* closed: Q2 Pod reads a reply until the close */
     close(fd);
-    (void)path;
     CHECK(!strncmp(r->buf, "Q2SPOT/1\n", 9));
     char *s = r->buf + 9, *e;
     r->rows = -1;
@@ -620,7 +617,6 @@ static void ask(const char *root, reply_t *r, const char *line) {
             else
                 c = "";
             unesc(out[k]);
-            if (!*c && k + 1 < want && !strchr(s, '\t')) {}
         }
         CHECK(k == want);
         CHECK(++r->rows <= 50);
@@ -1001,10 +997,8 @@ int main(int argc, char **argv) {
         free(raw);
         return 0;
     }
-    if (argc == 6 && !strcmp(argv[1], "keys")) {
-        int cue = atoi(argv[3]);
-        printf("%llu %u %u\n", prof_key(argv[2]), listen_key(argv[2], cue),
-               album_ident(argv[4], argv[5], argv[2]));
+    if (argc == 3 && !strcmp(argv[1], "key")) {
+        printf("%llu\n", prof_key(argv[2]));
         return 0;
     }
     if (argc == 4 && !strcmp(argv[1], "lookup")) {

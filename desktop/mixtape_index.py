@@ -37,8 +37,7 @@ NOT_MUSIC = ('audiobooks', 'podcasts')  # Q2 Pod's own folders, at the card's ro
 def prof_key(rel):
     """A song's key: FNV-1a 64 of its path from the card's root (src/lib.c prof_key)."""
     h = 0xcbf29ce484222325
-    data = rel.encode('utf-8', 'surrogateescape') if isinstance(rel, str) else rel
-    for b in data:
+    for b in rel.encode('utf-8', 'surrogateescape'):
         h = ((h ^ b) * 0x100000001b3) & 0xffffffffffffffff
     return h
 
@@ -218,7 +217,7 @@ def main(argv=None):
     began = time.monotonic()
     tty = sys.stdout.isatty()
     with open(out, 'r+b') as f:
-        f.truncate(HEAD.size + records * RECORD.size if known else HEAD.size)  # a cut record goes
+        f.truncate(HEAD.size + records * RECORD.size)  # a cut record goes
         f.seek(0, os.SEEK_END)
         pool = Pool(max(1, args.jobs), signal.signal, (signal.SIGINT, signal.SIG_IGN))  # Ctrl-C is ours
         try:

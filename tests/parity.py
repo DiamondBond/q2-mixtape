@@ -52,14 +52,19 @@ def close(a, b, what):
     return err
 
 
+def index(*args, check=True):
+    """The desktop indexer run on args."""
+    return subprocess.run([sys.executable, '-I', os.path.join(HERE, '..', 'desktop', 'mixtape_index.py'), *args],
+                          check=check, capture_output=True, text=True)
+
+
 def main():
     shutil.rmtree(WORK, ignore_errors=True)
     os.makedirs(WORK)
     worst = 0
 
     for path in ('/mnt/mmc/Music/A/01 One.flac', '/mnt/mmc/Música/Ñu/02 Ünï.mp3'):
-        key, _, _ = c('keys', path, '0', 'x', 'y')
-        assert int(key) == mi.prof_key(path[len('/mnt/mmc/'):]), path
+        assert int(c('key', path)[0]) == mi.prof_key(path[len('/mnt/mmc/'):]), path
 
     for seed in range(3):  # features alone, from the same samples
         pcm = clip(30, seed)[::2, 0][:30 * 22050].copy()  # stand-in 22.05 kHz mono
@@ -86,30 +91,28 @@ def main():
             os.makedirs(os.path.dirname(path), exist_ok=True)
             open(path, 'wb').write(b'not audio' if 'cue' not in rel else
                                    b'REM x\r\nFILE "image.wav" WAVE\r\n  TRACK 01 AUDIO\r\n')
+    heard = {}
     for rel in ('Music/A/01 Long.wav', 'Music/A/02 Short.wav', 'Music/B/Ünï.wav'):  # the same file
-        sec, status, f = mi.analyse(os.path.join(card, rel))
+        sec, status, f = heard[rel] = mi.analyse(os.path.join(card, rel))
         got = c('analyse', os.path.join(card, rel))
         assert (int(got[0]), int(got[1])) == (sec, status) == ({'01': 75, '02': 12}.get(rel[8:10], 40), mi.OK), rel
         worst = max(worst, close([float(v) for v in got[2:]], f, rel))
 
-    out = subprocess.run([sys.executable, '-I', os.path.join(HERE, '..', 'desktop', 'mixtape_index.py'), card,
-                          '-j', '2'], check=True, capture_output=True, text=True).stdout
+    out = index(card, '-j', '2').stdout
     assert out.startswith('3 songs, 3 to hear') and 'Done: 3 heard' in out, out
     for rel in ('Music/A/01 Long.wav', 'Music/B/Ünï.wav'):  # what the Q2's C reads from the file
         got = c('lookup', root, rel)
-        sec, status, f = mi.analyse(os.path.join(card, rel))
+        sec, status, f = heard[rel]
         assert got[0] == '3' and (int(got[1]), int(got[2]), int(got[3])) == \
             (sec, mi.OK, os.path.getsize(os.path.join(card, rel))), got[:4]
         close([float(v) for v in got[4:]], f, 'lookup ' + rel)
     assert c('lookup', root, 'podcasts/Ep.wav')[1] == '-1'
-    out = subprocess.run([sys.executable, '-I', os.path.join(HERE, '..', 'desktop', 'mixtape_index.py'), card],
-                         check=True, capture_output=True, text=True).stdout
+    out = index(card).stdout
     assert out.startswith('3 songs, 0 to hear'), out
     write_wav(os.path.join(card, 'Music/A/02 Short.wav'), clip(20, 15))  # changed: heard again
     with open(os.path.join(card, '.mixtape', 'profiles'), 'ab') as f:
         f.write(b'cut')  # a write the computer's crash cut short
-    out = subprocess.run([sys.executable, '-I', os.path.join(HERE, '..', 'desktop', 'mixtape_index.py'), card],
-                         check=True, capture_output=True, text=True).stdout
+    out = index(card).stdout
     assert out.startswith('3 songs, 1 to hear'), out
     size = os.path.getsize(os.path.join(card, '.mixtape', 'profiles'))
     assert size == mi.HEAD.size + 4 * mi.RECORD.size, size
@@ -117,8 +120,7 @@ def main():
     profiles = os.path.join(card, '.mixtape', 'profiles')  # a newer Mixtape's file: left as it is
     newer = mi.HEAD.pack(mi.MAGIC, mi.VERSION + 1, mi.RECORD.size, 0) + open(profiles, 'rb').read()[mi.HEAD.size:]
     open(profiles, 'wb').write(newer)
-    run = subprocess.run([sys.executable, '-I', os.path.join(HERE, '..', 'desktop', 'mixtape_index.py'), card],
-                         capture_output=True, text=True)
+    run = index(card, check=False)
     assert run.returncode and 'newer Mixtape' in run.stderr and open(profiles, 'rb').read() == newer, run
     print('parity: keys equal; features within %.1e of C (tolerance %.0e); indexer file read by C' % (worst, TOL))
 

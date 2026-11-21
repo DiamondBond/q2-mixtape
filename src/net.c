@@ -228,22 +228,15 @@ const char *lastfm_key(void) {
 #ifdef LASTFM_API_KEY
     if (LASTFM_API_KEY[0]) return LASTFM_API_KEY;
 #endif
-    char line[256];
+    char line[256], sec[16];
     int in = 0;
     FILE *f = fopen(R(CARD "/.scrobble.ini"), "rb");
     key[0] = 0;
-    while (f && fgets(line, sizeof line, f)) {
-        char *s = line, *e = line + strlen(line);
-        while (*s == ' ' || *s == '\t') ++s;
-        while (e > s && (e[-1] == '\n' || e[-1] == '\r' || e[-1] == ' ' || e[-1] == '\t')) *--e = 0;
-        if (*s == '[') in = !strcmp(s, "[LASTFM]");
-        char *eq = strchr(s, '=');
-        if (!in || !eq) continue;
-        char *k = eq;
-        while (k > s && (k[-1] == ' ' || k[-1] == '\t')) --k;
-        for (++eq; *eq == ' ' || *eq == '\t';) ++eq;
-        if (k - s == 7 && !strncmp(s, "API_KEY", 7)) snprintf(key, sizeof key, "%s", eq);
-    }
+    while (f && fgets(line, sizeof line, f))
+        if (sscanf(line, " [%15[^]]", sec) == 1)
+            in = !strcmp(sec, "LASTFM");
+        else if (in)
+            sscanf(line, " API_KEY = %63s", key);
     if (f) fclose(f);
     if (key[strspn(key, "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_-")])
         key[0] = 0;

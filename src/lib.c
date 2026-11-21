@@ -59,7 +59,7 @@ int put_file(const char *path, const void *data, size_t n) {
     return 0;
 }
 
-long long file_stamp(const char *path) {
+static long long file_stamp(const char *path) {
     struct stat s;
     return stat(path, &s) ? 0 : (long long)s.st_mtime * 1000003 + s.st_size;
 }
@@ -71,23 +71,23 @@ static unsigned bytes32(unsigned h, const void *s, unsigned n) {
     return h;
 }
 /* Q2 Pod's fnv: FNV-1a 32, then a step more, so "ab"+"c" and "a"+"bc" differ. */
-unsigned fnv32(unsigned h, const char *s) { return bytes32(h, s, s ? strlen(s) : 0) * 16777619u; }
+static unsigned fnv32(unsigned h, const char *s) {
+    return bytes32(h, s, s ? strlen(s) : 0) * 16777619u;
+}
 
 static unsigned long long fnv64(unsigned long long h, const char *s) {
     for (; *s; ++s) h = (h ^ (unsigned char)*s) * 0x100000001b3ull;
     return h;
 }
-/* A profile's key: FNV-1a 64 of the path on the card (a computer sees the same), with a CUE
- * track's bounds after it, since an image's tracks share one file. */
+/* A profile's key: FNV-1a 64 of the path on the card, as a computer sees it too. */
 unsigned long long prof_key(const char *path) {
     if (!strncmp(path, CARD "/", sizeof CARD)) path += sizeof CARD;
     return fnv64(0xcbf29ce484222325ull, path);
 }
-/* Q2 Pod's listen_key, which keys its play counts and hearts: the path's fnv, a CUE track's
- * start mixed in. Never 0. */
-unsigned listen_key(const char *path, int cue) {
+/* Q2 Pod's listen_key, which keys its play counts and hearts: the path's fnv (a CUE track's
+ * start would be mixed in, but the Library here has none). Never 0. */
+unsigned listen_key(const char *path) {
     unsigned key = fnv32(2166136261u, path);
-    if (cue) key = bytes32(key, &cue, sizeof cue); /* the int's own bytes: both little-endian */
     return key | !key;
 }
 
@@ -104,9 +104,10 @@ static unsigned album_dir(const char *p) {
         return i - 5;
     return n;
 }
-static unsigned fnv_lower(unsigned h, const char *s) {
-    for (; s && *s; ++s) {
-        unsigned char c = (unsigned char)*s;
+/* s's first n bytes lowercased (ASCII), FNV-1a 32 from h, then a step more, as Q2 Pod's. */
+static unsigned fnv_lower(unsigned h, const char *s, unsigned n) {
+    for (unsigned i = 0; s && i < n && s[i]; ++i) {
+        unsigned char c = (unsigned char)s[i];
         h = (h ^ (c + ((unsigned)(c - 'A') < 26u) * 32)) * 16777619u;
     }
     return h * 16777619u;
@@ -114,8 +115,8 @@ static unsigned fnv_lower(unsigned h, const char *s) {
 /* Q2 Pod's album_ident, which keys album hearts: the name and album artist, else the name and
  * the folder (disc folders as one), ASCII case aside but the folder's. Never 0. */
 unsigned album_ident(const char *x, const char *y, const char *p) {
-    unsigned h = fnv_lower(2166136261u, x);
-    h = x && *x && y && *y ? fnv_lower(h, y) : bytes32(h, p, album_dir(p)) * 16777619u;
+    unsigned h = fnv_lower(2166136261u, x, -1u);
+    h = x && *x && y && *y ? fnv_lower(h, y, -1u) : bytes32(h, p, album_dir(p)) * 16777619u;
     return h | !h;
 }
 
@@ -140,25 +141,18 @@ unsigned norm_hash(const char *s, int title) {
     return any ? h | !h : 0;
 }
 
-/* s's first n bytes lowercased (ASCII), FNV-hashed; 0 for none. */
-unsigned lower_hash(const char *s, unsigned n) {
-    unsigned h = 2166136261u;
-    for (unsigned i = 0; s && i < n && s[i]; ++i) {
-        unsigned char c = (unsigned char)s[i];
-        h = (h ^ ((unsigned)(c - 'A') < 26u ? c + 32u : c)) * 16777619u;
-    }
-    return s && n && *s ? h | !h : 0;
-}
-
-/* A genre tag's first four names (split at ; / , |, spaces trimmed), hashed. */
-void genres(const char *s, unsigned *g) {
+/* A genre tag's first four names (split at ; / , |, spaces trimmed), hashed, never 0. */
+static void genres(const char *s, unsigned *g) {
     for (int k = 0; s && *s && k < 4;) {
         while (*s == ' ') ++s;
         unsigned n = 0;
         while (s[n] && s[n] != ';' && s[n] != '/' && s[n] != ',' && s[n] != '|') ++n;
         unsigned e = n;
         while (e && s[e - 1] == ' ') --e;
-        if (e) g[k++] = lower_hash(s, e);
+        if (e) {
+            unsigned h = fnv_lower(2166136261u, s, e);
+            g[k++] = h | !h;
+        }
         s += n + !!s[n];
     }
 }
@@ -407,22 +401,18 @@ void dur_close(void) {
     if (dur.map) munmap((void *)dur.map, dur.len);
     memset(&dur, 0, sizeof dur);
 }
-/* path's measured length in seconds; 0 unknown. */
+static int by_dur_key(const void *key, const void *rec) {
+    unsigned long long a = *(const unsigned long long *)key, b;
+    memcpy(&b, rec, 8);
+    return (a > b) - (a < b);
+}
+/* path's measured length in seconds; 0 unknown. Records: {u64 key, u32 size, mtime, ns, i32 sec}.
+ */
 int dur_sec(const char *path) {
     unsigned long long key = fnv64(0xcbf29ce484222325ull, path);
-    unsigned lo = 0, hi = dur.n;
-    while (lo < hi) { /* records: {u64 key, u32 size, mtime, ns, i32 sec} */
-        unsigned mid = lo + (hi - lo) / 2;
-        unsigned long long k;
-        memcpy(&k, dur.map + 8 + 24 * (size_t)mid, 8);
-        if (k < key)
-            lo = mid + 1;
-        else
-            hi = mid;
-    }
+    const unsigned char *rec = dur.n ? bsearch(&key, dur.map + 8, dur.n, 24, by_dur_key) : 0;
     int sec = 0;
-    if (lo < dur.n && !memcmp(dur.map + 8 + 24 * (size_t)lo, &key, 8))
-        memcpy(&sec, dur.map + 8 + 24 * (size_t)lo + 20, 4);
+    if (rec) memcpy(&sec, rec + 20, 4);
     return sec > 0 ? sec : 0;
 }
 
@@ -441,16 +431,15 @@ static int lib_row(void *ctx, void *st) {
     song_t *s = &lib.v[lib.n++];
     memset(s, 0, sizeof *s);
     s->id = (unsigned)col_i(st, 0);
-    s->lkey = listen_key(path, 0);
+    s->lkey = listen_key(path);
     s->pkey = prof_key(path);
     s->artist = norm_hash(artist, 0), s->album_artist = norm_hash(aa, 0);
     s->title = norm_hash(col_s(st, 5), 1);
     s->album = album_ident(album, aa, path);
     genres(col_s(st, 6), s->genre);
-    if (year[0] >= '1' && year[0] <= '9' && year[1] >= '0' && year[1] <= '9' && year[2] >= '0' &&
-        year[2] <= '9' && year[3] >= '0' && year[3] <= '9')
-        s->year = (short)((year[0] - '0') * 1000 + (year[1] - '0') * 100 + (year[2] - '0') * 10 +
-                          year[3] - '0');
+    int y;
+    if (year[0] > '0' && year[0] <= '9' && sscanf(year, "%4d", &y) == 1 && y >= 1000)
+        s->year = (short)y;
     int sec = dur_sec(path);
     s->sec = (short)(sec < 32767 ? sec : 32767);
     s->recency = -1;
@@ -470,18 +459,15 @@ static int by_unsigned(const void *a, const void *b) {
     unsigned x = *(const unsigned *)a, y = *(const unsigned *)b;
     return (x > y) - (x < y);
 }
+static int by_key_bits(const void *a, const void *b) {
+    unsigned x = *(const unsigned *)a & ~7u, y = *(const unsigned *)b & ~7u;
+    return (x > y) - (x < y);
+}
 /* The hearts kept for key in a sorted table of words (the key with its low three bits the
  * hearts): 0 for none, 6 and 7 too. */
 static int hearts_of(const unsigned *w, unsigned n, unsigned key) {
-    unsigned lo = 0, hi = n, k = key & ~7u;
-    while (lo < hi) {
-        unsigned mid = lo + (hi - lo) / 2;
-        if ((w[mid] & ~7u) < k)
-            lo = mid + 1;
-        else
-            hi = mid;
-    }
-    return lo < n && (w[lo] & ~7u) == k && (w[lo] & 7) <= 5 ? (int)(w[lo] & 7) : 0;
+    const unsigned *f = n ? bsearch(&key, w, n, sizeof *w, by_key_bits) : 0;
+    return f && (*f & 7) <= 5 ? (int)(*f & 7) : 0;
 }
 typedef struct {
     unsigned *v, n, cap;
@@ -493,7 +479,7 @@ static int fav_row(void *ctx, void *st) {
         if (!v) return 1;
         k->v = v, k->cap = cap;
     }
-    k->v[k->n++] = listen_key(col_s(st, 1), col_i(st, 2));
+    k->v[k->n++] = listen_key(col_s(st, 1));
     return 0;
 }
 static int has(const unsigned *v, unsigned n, unsigned key) {
@@ -520,8 +506,8 @@ static void refresh(void *db) {
     if (rates) qsort(rates, nr, sizeof *rates, by_unsigned);
     if (arates) qsort(arates, na, sizeof *arates, by_unsigned);
     keys_t fav = { 0 };
-    db_page(db, "select id,fileurl,time from myfav where id>? order by id limit 500", &last,
-            fav_row, &fav);
+    db_page(db, "select id,fileurl from myfav where id>? order by id limit 500", &last, fav_row,
+            &fav);
     if (fav.n) qsort(fav.v, fav.n, sizeof *fav.v, by_unsigned);
     profs_close(&lib.profs);
     profs_open(&lib.profs);
@@ -593,15 +579,12 @@ int lib_load(int fresh) {
     return lib.n;
 }
 
+static int by_id(const void *key, const void *song) {
+    unsigned a = *(const unsigned *)key, b = ((const song_t *)song)->id;
+    return (a > b) - (a < b);
+}
 /* songtable's id in lib.v, which is in id order; -1 when not there. */
 int lib_find(unsigned id) {
-    int lo = 0, hi = lib.n;
-    while (lo < hi) {
-        int mid = lo + (hi - lo) / 2;
-        if (lib.v[mid].id < id)
-            lo = mid + 1;
-        else
-            hi = mid;
-    }
-    return lo < lib.n && lib.v[lo].id == id ? lo : -1;
+    const song_t *s = lib.n ? bsearch(&id, lib.v, (size_t)lib.n, sizeof *lib.v, by_id) : 0;
+    return s ? (int)(s - lib.v) : -1;
 }
