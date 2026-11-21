@@ -2,14 +2,15 @@
 
 Mixes and playlists for [Q2 Pod](https://github.com/DiamondBond/q2-pod), made from the music on your card: what you play, what it sounds like, and what Last.fm and ListenBrainz recommend.
 
-A card app for the Shanling Q2. Install it from Q2 Pod's App Store, or unzip `mixtape.zip` at the card's root (it holds one folder, `.mixtape`). It then appears in the Library, above **Games** (on Q2 Pod 1.8.7, on the Streaming page). Everything works on Q2 Pod 1.8.7 or later; on an older one, a row says what needs an update.
+A card app for the Shanling Q2. Install it from Q2 Pod's App Store, or unzip `mixtape.zip` at the card's root (it holds one folder, `.mixtape`). It then appears in **Library → Apps** (on Q2 Pod 1.8.8, in the Library above **Games**; on 1.8.7, on the Streaming page). Everything works on Q2 Pod 1.8.7 or later; on an older one, a row says what needs an update.
 
 ## The mixes
 
-Each mix is about 45 minutes (at most 20 songs), drawn when you open it and kept until you open another, press **Re-roll** or leave Mixtape for ten minutes, with some variety: never the same artist twice in a row, at most two songs by one artist, and at most one from any album but the one it's made from. Songs under a minute are left out, and so are the tracks of a CUE image: a playlist can only name the whole file.
+Each mix is as long as **Mix Length** says, from 5 minutes to an hour (45 minutes until you choose; at most 30 songs), and ends as near that length as its songs allow. It is drawn when you open it and kept until you open another, press **Re-roll** or leave Mixtape for ten minutes, with some variety: never the same artist twice in a row, at most two songs by one artist, and at most one from any album but the one it's made from. Songs under a minute are left out, and so are the tracks of a CUE image: a playlist can only name the whole file.
 
 ```
 Mixtape
+├── Shuffle                 any songs from your Library
 ├── Most Played             your most played songs
 ├── Forgotten Favourites    loved or played a lot, but not lately
 ├── Never Played            songs with no play counted
@@ -18,10 +19,11 @@ Mixtape
 ├── From an Artist          Search, then every artist: songs that sound like theirs
 ├── Last.fm                 Username:, then Similar Artists
 ├── ListenBrainz            Username:, then Recommendations
-└── Listen to Your Music    how many songs are heard; Listen Now
+├── Listen to Your Music    how many songs are heard; Listen Now
+└── Mix Length              5, 10, 15, 20, 30, 45 or 60 minutes
 ```
 
-The first four need no listening: they come from Q2 Pod's play counts and your hearts (rated songs and albums count for more, a one-heart song for much less). Q2 Pod keeps counts for 512 songs, so in a big library **Never Played** means none kept.
+**Shuffle** draws any songs at random, all but the ones you've given one heart. It and the next four need no listening: those four come from Q2 Pod's play counts and your hearts (rated songs and albums count for more, a one-heart song for much less). Q2 Pod keeps counts for 512 songs, so in a big library **Never Played** means none kept.
 
 **From an Album** and **From an Artist** start with one of the album's (or artist's) best-loved songs, put two more of its own a third and two thirds of the way in, and fill the rest with the songs nearest in sound, helped by the tags: the same artist, genre, era and length. They need your music heard first (below); until then only songs the tags vouch for are used.
 
@@ -59,7 +61,7 @@ If your music lives on the computer laid out as on the card, run it on that fold
 
 ## Files
 
-On the card, in `.mixtape/`: `profiles` (what was heard), `accounts` (your usernames) and `play.m3u` (the mix playing). Updates keep them. Saved mixes go to `_explaylist_data/`, as Q2 Pod's playlists do. Removing the app removes `.mixtape/`, profiles included: keep a copy if you'd rather not hear the library again.
+On the card, in `.mixtape/`: `profiles` (what was heard), `accounts` (your usernames), `length` (Mix Length) and `play.m3u` (the mix playing). Updates keep them. Saved mixes go to `_explaylist_data/`, as Q2 Pod's playlists do. Removing the app removes `.mixtape/`, profiles included: keep a copy if you'd rather not hear the library again.
 
 ## Building
 

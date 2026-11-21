@@ -252,7 +252,10 @@ void mx_counts(song_t *v, int n, int kind) {
                     : 0;
         else if (kind == MIX_NEVER)
             b = !s->plays;
-        else if (kind == MIX_DEEP && !s->plays && s->artist) {
+        else if (kind == MIX_SHUFFLE) { /* any song but a disliked one, each as likely */
+            s->score = MX_SHORT(s) || s->hearts == 1 ? 0 : 1 + (float)rnd(1 << 16);
+            continue;
+        } else if (kind == MIX_DEEP && !s->plays && s->artist) {
             artist_plays key = { s->artist, 0 },
                          *f = k ? bsearch(&key, a, (size_t)k, sizeof *a, by_artist) : 0;
             b = f ? (float)log2(1 + f->plays) : 0;
@@ -318,15 +321,15 @@ void mx_items(song_t *v, int n, item_t *items, int ni, int kind) {
 
 /* The song for list[slot] (len slots, -1 empty): one of the MX_TOP best not yet used or struck,
  * drawn by score squared. Rules: a different artist from both neighbours, at most two songs by an
- * artist and one from an album besides the seed's, and no second copy of a title by the same
- * artist. -1 when none qualifies. */
-static int mx_fill(song_t *v, int n, const int *list, int len, int slot) {
+ * artist and one from an album besides the seed's, no second copy of a title by the same artist,
+ * and at most room seconds long. -1 when none qualifies. */
+static int mx_fill(song_t *v, int n, const int *list, int len, int slot, int room) {
     int top[MX_TOP], k = 0;
     const song_t *prev = slot > 0 && list[slot - 1] >= 0 ? &v[list[slot - 1]] : 0,
                  *next = slot + 1 < len && list[slot + 1] >= 0 ? &v[list[slot + 1]] : 0;
     for (int i = 0; i < n; ++i) {
         const song_t *c = &v[i];
-        if (c->seed || c->flags || c->score <= 0) continue;
+        if (c->seed || c->flags || c->score <= 0 || MX_SECS(c->sec) > room) continue;
         if (c->artist &&
             ((prev && prev->artist == c->artist) || (next && next->artist == c->artist)))
             continue;
@@ -373,50 +376,66 @@ static int mx_seed(song_t *v, int n, int best) {
     return !best ? pick : k ? top[rnd((unsigned)k)] : -1;
 }
 
-/* A new mix into list: with seeded, the seed's best-loved track first and two more of its tracks
- * a third and two thirds in when it has three or more; the rest filled in order until about
- * MX_TARGET_S or MX_MAX songs. A seed song (Now Playing's) is not seeded: it is playing already.
- * Returns how many. */
-int mx_craft(song_t *v, int n, int *list, int seeded) {
-    for (int i = 0; i < n; ++i) v[i].flags = 0;
-    for (int i = 0; i < MX_MAX; ++i) list[i] = -1;
-    int eligible = 0, total = 0, i;
-    if (seeded) {
-        for (i = 0; i < n; ++i) eligible += v[i].seed && !MX_SHORT(&v[i]);
-        if ((list[0] = mx_seed(v, n, 1)) < 0) return 0;
-        v[list[0]].flags = MX_USED;
-        for (int at = 4; eligible >= 3 && at <= 8; at += 4)
-            if ((list[at] = mx_seed(v, n, 0)) >= 0) v[list[at]].flags = MX_USED;
-    }
-    for (i = 0; i < MX_MAX; ++i) {
-        if (list[i] < 0 && (list[i] = mx_fill(v, n, list, MX_MAX, i)) < 0) break;
-        v[list[i]].flags = MX_USED;
-        total += v[list[i]].sec > 0 ? v[list[i]].sec : MX_GUESS_S;
-        if (total >= MX_TARGET_S) {
-            ++i;
+/* How long the next song may be, total of target seconds in: it may pass the target by no more
+ * than the mix is short of it, nor by more than a fifth, so the mix ends as near the target as
+ * its songs allow. */
+static int room(int total, int target) {
+    int short_by = target - total;
+    return short_by + (short_by < target / 5 ? short_by : target / 5);
+}
+
+/* list's slots from i on (-1 empty, or a seed placed) filled in order until target seconds (total
+ * so far) or MX_MAX songs, the slots after the last emptied. Returns the length. */
+static int fill_to(song_t *v, int n, int *list, int i, int total, int target) {
+    for (; i < MX_MAX && total < target; ++i) {
+        if (list[i] < 0 && (list[i] = mx_fill(v, n, list, MX_MAX, i, room(total, target))) < 0)
             break;
-        }
+        v[list[i]].flags = MX_USED;
+        total += MX_SECS(v[list[i]].sec);
     }
     for (int j = i; j < MX_MAX; ++j)
         if (list[j] >= 0) v[list[j]].flags = 0, list[j] = -1;
     return i;
 }
 
+/* A new mix into list, about target seconds long: with seeded, the seed's best-loved track first
+ * and two more of its tracks a third and two thirds in when it has three or more, the rest
+ * filled in order. A seed song (Now Playing's) is not seeded: it is playing already. Returns how
+ * many. */
+int mx_craft(song_t *v, int n, int *list, int seeded, int target) {
+    for (int i = 0; i < n; ++i) v[i].flags = 0;
+    for (int i = 0; i < MX_MAX; ++i) list[i] = -1;
+    if (seeded) {
+        int eligible = 0;
+        for (int i = 0; i < n; ++i) eligible += v[i].seed && !MX_SHORT(&v[i]);
+        if ((list[0] = mx_seed(v, n, 1)) < 0) return 0;
+        v[list[0]].flags = MX_USED;
+        for (int at = 4; eligible >= 3 && at <= 8; at += 4)
+            if ((list[at] = mx_seed(v, n, 0)) >= 0) v[list[at]].flags = MX_USED;
+    }
+    return fill_to(v, n, list, 0, 0, target);
+}
+
 /* Struck slots refilled (their songs never offered again this craft), or with none struck, every
- * slot but the seed's own refilled with other picks. A slot nothing fits goes. Returns the new
- * length; struck cleared. */
-int mx_reroll(song_t *v, int n, int *list, int len, unsigned char *struck) {
-    int any = 0, k = 0;
+ * slot but the seed's own refilled with other picks; a slot nothing fits goes, and the mix is
+ * filled again to about target seconds. Returns the new length; struck cleared. */
+int mx_reroll(song_t *v, int n, int *list, int len, unsigned char *struck, int target) {
+    int any = 0, k = 0, total = 0;
     for (int i = 0; i < len; ++i) any |= struck[i];
     for (int i = 0; i < len; ++i)
         if (any ? struck[i] : !v[list[i]].seed)
             v[list[i]].flags = any ? MX_REJECTED : MX_ASIDE, list[i] = -1;
+        else
+            total += MX_SECS(v[list[i]].sec);
     for (int i = 0; i < len; ++i)
-        if (list[i] < 0 && (list[i] = mx_fill(v, n, list, len, i)) >= 0) v[list[i]].flags = MX_USED;
-    for (int i = 0; i < n; ++i)
-        if (v[i].flags == MX_ASIDE) v[i].flags = 0;
+        if (list[i] < 0 && (list[i] = mx_fill(v, n, list, len, i, room(total, target))) >= 0)
+            v[list[i]].flags = MX_USED, total += MX_SECS(v[list[i]].sec);
     for (int i = 0; i < len; ++i)
         if (list[i] >= 0) list[k++] = list[i];
+    for (int i = k; i < MX_MAX; ++i) list[i] = -1;
+    k = fill_to(v, n, list, k, total, target);
+    for (int i = 0; i < n; ++i)
+        if (v[i].flags == MX_ASIDE) v[i].flags = 0;
     memset(struck, 0, MX_MAX);
     return k;
 }

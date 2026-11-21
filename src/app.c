@@ -29,6 +29,7 @@
 #define SCAN_FILE "/tmp/q2-mixtape.scan"
 #define QUEUE APP_DIR "/play.m3u"
 #define ACCOUNTS APP_DIR "/accounts"
+#define LENGTH APP_DIR "/length" /* the mixes' length in minutes */
 #define PLAYLISTS CARD "/_explaylist_data"
 #define REPLY_MAX (64 << 10) /* Q2SPOT/1's limits */
 #define REQ_MAX (8 << 10)
@@ -241,15 +242,31 @@ static struct {
     net_t net;      /* the recommendations it is made from */
 } mx;
 
-static const char *const COUNTS[] = { "most", "forgotten", "never", "deep" };
+static const char *const COUNTS[] = { "most", "forgotten", "never", "deep", "shuffle" };
 static const char *const COUNT_NAMES[] = { "Most Played", "Forgotten Favourites", "Never Played",
-                                           "Deep Cuts" };
+                                           "Deep Cuts", "Shuffle" };
 static const char *const COUNT_EMPTY[] = {
     "Play some music first: this mix is made from play counts",
     "Nothing forgotten yet: songs played or loved a while ago",
     "Every song has a play counted",
     "Play some music first: this mix is made from play counts",
+    "Not enough songs in the Library",
 };
+
+/* How long a mix is, in minutes: one of LENGTHS, kept in LENGTH. */
+static const int LENGTHS[] = { 5, 10, 15, 20, 30, 45, 60 };
+static int length_min = 45;
+static int length_ok(int m) {
+    for (unsigned i = 0; i < sizeof LENGTHS / sizeof *LENGTHS; ++i)
+        if (LENGTHS[i] == m) return 1;
+    return 0;
+}
+static void length_read(void) {
+    FILE *f = fopen(R(LENGTH), "rb");
+    int m;
+    if (f && fscanf(f, "%d", &m) == 1 && length_ok(m)) length_min = m;
+    if (f) fclose(f);
+}
 
 static void rows_fetch(void) {
     void *db = db_open();
@@ -276,7 +293,7 @@ static const group_t *group_of(const group_t *g, int n, unsigned hash) {
 static void craft(const char *arg, int again) {
     unsigned h = 0;
     int kind = -1, lb = !strcmp(arg, "listenbrainz");
-    for (int i = 0; i < 4; ++i)
+    for (int i = 0; i < MIX_SOUND; ++i)
         if (!strcmp(arg, COUNTS[i])) kind = i;
     if (sscanf(arg, "album %x", &h) == 1 || sscanf(arg, "artist %x", &h) == 1 ||
         sscanf(arg, "song %u", &h) == 1)
@@ -350,8 +367,10 @@ static void craft(const char *arg, int again) {
                  lb ? "ListenBrainz Picks" : "Last.fm Similar Artists");
         mx_items(v, n, mx.net.v, mx.net.n, kind);
     }
-    mx.len = mx_craft(v, n, mx.list, mx.seeded);
-    if (mx.len < (kind >= MIX_LASTFM ? 1 : MX_MIN)) {
+    int target = length_min * 60, secs = 0;
+    mx.len = mx_craft(v, n, mx.list, mx.seeded, target);
+    for (int i = 0; i < mx.len; ++i) secs += MX_SECS(v[mx.list[i]].sec);
+    if (!mx.len || (kind < MIX_LASTFM && mx.len < MX_MIN && 2 * secs < target)) {
         mx.len = 0;
         if (kind < MIX_SOUND)
             snprintf(mx.said, sizeof mx.said, "%s", COUNT_EMPTY[kind]);
@@ -383,7 +402,7 @@ static void mix_rows(rep_t *r) {
         if (mx.struck[i])
             ++struck;
         else if (mx.row[i].path[0])
-            ++kept, total += mx.row[i].sec > 0 ? mx.row[i].sec : MX_GUESS_S;
+            ++kept, total += MX_SECS(mx.row[i].sec);
     if (mx.len) {
         int k = mx.kind == MIX_SOUND ? snprintf(sub, sizeof sub, "%s%s \xc2\xb7 ",
                                                 mx.seeded ? "From " : "Like ", mx.name)
@@ -502,7 +521,7 @@ static void act_reroll(rep_t *r, const char *ctx) {
     char key[sizeof mx.key];
     snprintf(key, sizeof key, "%s", mx.key);
     if (lib_load(0) && lib.gen == mx.libgen && !mx.pending) {
-        int len = mx_reroll(lib.v, lib.n, mx.list, mx.len, mx.struck);
+        int len = mx_reroll(lib.v, lib.n, mx.list, mx.len, mx.struck, length_min * 60);
         if (len) {
             mx.len = len, ++mx.gen;
             rows_fetch();
@@ -590,12 +609,13 @@ static void act_save(rep_t *r, const char *ctx) {
 
 static void page_menu(rep_t *r) {
     scan_t s;
-    char a[16], b[16], sub[96] = "How each song sounds, for the sound mixes";
+    char a[16], b[16], sub[96] = "How each song sounds, for the sound mixes", len[24];
     int scanning = scanner > 0 && scan_read(&s);
     if (scanning && !strcmp(s.phase, "listen"))
         snprintf(sub, sizeof sub, "Listening: %s of %s", commas(s.done, a), commas(s.total, b));
     else if (scanning)
         snprintf(sub, sizeof sub, "Checking your songs\xe2\x80\xa6");
+    row(r, "list", "mix", "Shuffle", "Any songs from your Library", "shuffle");
     row(r, "list", "mix", "Most Played", "Your most played songs", "most");
     row(r, "list", "mix", "Forgotten Favourites", "Loved or played a lot, but not lately",
         "forgotten");
@@ -606,6 +626,30 @@ static void page_menu(rep_t *r) {
     row(r, "list", "lastfm", "Last.fm", "Its similar artists, from your card", "");
     row(r, "list", "listenbrainz", "ListenBrainz", "Its picks for you, from your card", "");
     row(r, "list", "scan", "Listen to Your Music", sub, "");
+    snprintf(len, sizeof len, "%d minutes", length_min);
+    row(r, "list", "lengths", "Mix Length", len, "");
+}
+
+/* Mix Length's page: a row a length, the one chosen marked. */
+static void page_lengths(rep_t *r) {
+    for (unsigned i = 0; i < sizeof LENGTHS / sizeof *LENGTHS; ++i) {
+        char t[24], c[8];
+        snprintf(t, sizeof t, "%d minutes", LENGTHS[i]);
+        snprintf(c, sizeof c, "%d", LENGTHS[i]);
+        row(r, "action", "length", t, LENGTHS[i] == length_min ? "Chosen" : "", c);
+    }
+    snprintf(r->msg, sizeof r->msg, "refresh"); /* the mark moves at once */
+}
+
+static void act_length(rep_t *r, const char *ctx) {
+    int m = atoi(ctx);
+    char t[8];
+    if (!length_ok(m) || m == length_min) return;
+    length_min = m, mx.key[0] = 0; /* every mix made again at its next open */
+    int k = snprintf(t, sizeof t, "%d\n", m);
+    mkdir(R(APP_DIR), 0755);
+    if (!put_file(R(LENGTH), t, (size_t)k))
+        snprintf(r->msg, sizeof r->msg, "Can't write to the card");
 }
 
 static void page_groups(rep_t *r, int artists, const char *cursor) {
@@ -756,6 +800,10 @@ static void handle(char **a, int n, rep_t *r) {
         page_search(r, x);
     else if (!strcmp(op, "scan"))
         page_scan(r);
+    else if (!strcmp(op, "lengths"))
+        page_lengths(r);
+    else if (!strcmp(op, "length"))
+        act_length(r, x);
     else if (!strcmp(op, "lastfm") || !strcmp(op, "listenbrainz"))
         page_account(r, op[1] == 'i');
     else if (!strcmp(op, "fmuser") || !strcmp(op, "lbuser")) {
@@ -848,6 +896,7 @@ int serve(void) {
     int s = socket(AF_UNIX, SOCK_STREAM, 0);
     if (s < 0 || bind(s, (struct sockaddr *)&addr, sizeof addr) || listen(s, 4)) return 1;
     hold(0);
+    length_read();
     time_t last = time(0);
     int idle = IDLE_S;
 #ifdef HOST /* the checks wait seconds, not minutes */

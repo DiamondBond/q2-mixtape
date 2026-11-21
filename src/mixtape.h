@@ -14,12 +14,14 @@
 #define MX_CEPS 13
 #define MX_DIMS (2 * MX_CEPS)
 
-#define MX_MAX 20        /* songs in a mix */
-#define MX_MIN 6         /* fewer and there is no mix (Last.fm's and ListenBrainz's take any) */
-#define MX_TARGET_S 2700 /* about 45 minutes */
-#define MX_GUESS_S 240   /* a song of unknown length */
-#define MX_SHORT_S 60    /* intros and interludes stay out */
-#define MX_TOP 8         /* a slot draws from this many best */
+/* A mix: at most MX_MAX songs; fewer than MX_MIN, and under half the length asked for, is no mix
+ * (Last.fm's and ListenBrainz's take any). */
+#define MX_MAX 30 /* an hour of two-minute songs */
+#define MX_MIN 6
+#define MX_GUESS_S 240 /* a song of unknown length */
+#define MX_SECS(sec) ((sec) > 0 ? (sec) : MX_GUESS_S)
+#define MX_SHORT_S 60                                       /* intros and interludes stay out */
+#define MX_TOP 8                                            /* a slot draws from this many best */
 #define MX_SHORT(s) ((s)->sec > 0 && (s)->sec < MX_SHORT_S) /* sec <= 0: unknown */
 
 /* The profiles file, CARD/.mixtape/profiles: a header, then records appended as songs are heard,
@@ -91,7 +93,7 @@ typedef struct {
     char said[120]; /* why there are none, or "" */
 } net_t;
 
-enum { MIX_MOST, MIX_FORGOTTEN, MIX_NEVER, MIX_DEEP, MIX_SOUND, MIX_LASTFM, MIX_LB };
+enum { MIX_MOST, MIX_FORGOTTEN, MIX_NEVER, MIX_DEEP, MIX_SHUFFLE, MIX_SOUND, MIX_LASTFM, MIX_LB };
 
 /* Paths: under MIXTAPE_ROOT on a computer (the checks), as they are on the Q2 otherwise. */
 const char *R(const char *path);
@@ -143,8 +145,8 @@ int mx_features(const short *pcm, int n, float *out);
 void mx_rank(song_t *v, int n);
 void mx_counts(song_t *v, int n, int kind);
 void mx_items(song_t *v, int n, item_t *items, int ni, int kind);
-int mx_craft(song_t *v, int n, int *list, int seeded);
-int mx_reroll(song_t *v, int n, int *list, int len, unsigned char *struck);
+int mx_craft(song_t *v, int n, int *list, int seeded, int target);
+int mx_reroll(song_t *v, int n, int *list, int len, unsigned char *struck, int target);
 
 /* scan.c */
 int scan_main(void);

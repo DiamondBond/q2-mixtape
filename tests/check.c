@@ -252,11 +252,12 @@ static void make_library(void) {
     }
     put(ROOT "/mnt/data/ringnav-album-ratings", arates, sizeof arates);
 
-    /* lengths, as Scan Song Durations leaves them: every 37th song an interlude */
+    /* lengths, as Scan Song Durations leaves them: every 37th song an interlude, every 101st long
+     */
     dur_t *d = calloc(SONGS, sizeof *d);
     for (int i = 0; i < SONGS; ++i) {
         song_path(path, sizeof path, i);
-        d[i].key = path_key(path), d[i].sec = i % 37 ? 150 + i % 200 : 40;
+        d[i].key = path_key(path), d[i].sec = !(i % 37) ? 40 : i % 101 == 50 ? 900 : 150 + i % 200;
     }
     put_durations(ROOT "/mnt/data/ringnav-durations-v1", d, SONGS);
     free(d);
@@ -298,8 +299,9 @@ static int played_artist(unsigned artist) {
     return 0;
 }
 
-/* The variety rules every mix keeps; a crafted one (not a re-rolled one) about MX_TARGET_S long. */
-static void rules(const int *list, int len, int seeded, int crafted) {
+/* The variety rules every mix keeps; a timed one (target > 0) at most a fifth over target seconds,
+ * and short of it by less than half a song, most of the synthetic songs being 150 to 349 s. */
+static void rules(const int *list, int len, int seeded, int target) {
     int total = 0;
     for (int i = 0; i < len; ++i) {
         const song_t *s = &lib.v[list[i]];
@@ -314,9 +316,9 @@ static void rules(const int *list, int len, int seeded, int crafted) {
                 artist += o->artist == s->artist, album += o->album == s->album;
         }
         CHECK(artist <= 1 && !album);
-        total += s->sec > 0 ? s->sec : MX_GUESS_S;
+        total += MX_SECS(s->sec);
     }
-    CHECK(!crafted || len == MX_MAX || total >= MX_TARGET_S);
+    CHECK(target <= 0 || len == MX_MAX || (total > target - 175 && total <= target + target / 5));
     CHECK(!seeded || lib.v[list[0]].seed);
 }
 
@@ -348,9 +350,9 @@ static void check_library(void) {
     for (int kind = MIX_MOST; kind <= MIX_DEEP; ++kind) {
         t = now_s();
         mx_counts(lib.v, n, kind);
-        int len = mx_craft(lib.v, n, list, 0);
+        int len = mx_craft(lib.v, n, list, 0, 2700);
         CHECK(len >= MX_MIN);
-        rules(list, len, 0, 1);
+        rules(list, len, 0, 2700);
         for (int i = 0; i < len; ++i) {
             const song_t *s = &lib.v[list[i]];
             if (kind == MIX_MOST) CHECK(s->plays >= 100); /* the 512 counted, the most first */
@@ -361,6 +363,27 @@ static void check_library(void) {
         }
         printf("mix %d: %d songs in %.3f s\n", kind, len, now_s() - t);
     }
+    /* Shuffle: any song but a disliked one, a new draw each time, at every length */
+    static const int TARGETS[] = { 300, 600, 1200, 2700, 3600 };
+    for (int k = 0; k < 5; ++k) {
+        int a[MX_MAX], na, nb, same = 0, target = TARGETS[k];
+        mx_counts(lib.v, n, MIX_SHUFFLE);
+        na = mx_craft(lib.v, n, a, 0, target);
+        rules(a, na, 0, target);
+        mx_counts(lib.v, n, MIX_SHUFFLE);
+        nb = mx_craft(lib.v, n, list, 0, target);
+        rules(list, nb, 0, target);
+        for (int i = 0; i < na; ++i) {
+            CHECK(lib.v[a[i]].hearts != 1);
+            for (int j = 0; j < nb; ++j) same += a[i] == list[j];
+        }
+        CHECK(na >= 1 && same * 2 < na);
+        unsigned char one[MX_MAX] = { 0 };
+        one[0] = 1;
+        nb = mx_reroll(lib.v, n, list, nb, one, target); /* struck: the length kept */
+        rules(list, nb, 0, target);
+        printf("shuffle of %d min: %d songs\n", target / 60, na);
+    }
 
     /* an album: its best-loved track first, two more of its own a third and two thirds in, the rest
      * mostly of its sound */
@@ -368,8 +391,8 @@ static void check_library(void) {
     unsigned album = lib.v[lib_find(12346)].album;
     for (int i = 0; i < n; ++i) lib.v[i].seed = lib.v[i].album == album;
     mx_rank(lib.v, n);
-    int len = mx_craft(lib.v, n, list, 1), near = 0, seed = lib_find(12346);
-    rules(list, len, 1, 1);
+    int len = mx_craft(lib.v, n, list, 1, 2700), near = 0, seed = lib_find(12346);
+    rules(list, len, 1, 2700);
     CHECK(lib.v[list[4]].seed && lib.v[list[8]].seed && len >= 10);
     for (int i = 0; i < len; ++i) near += same_genre(list[i], seed);
     CHECK(near >= len * 3 / 4);
@@ -378,29 +401,30 @@ static void check_library(void) {
     int gone[MX_MAX], ng = 0;
     for (int i = 0; i < len; ++i)
         if (struck[i]) gone[ng++] = list[i];
-    int len2 = mx_reroll(lib.v, n, list, len, struck);
+    int len2 = mx_reroll(lib.v, n, list, len, struck, 2700);
     CHECK(len2 >= len - 1);
     for (int i = 0; i < len2; ++i)
         for (int j = 0; j < ng; ++j) CHECK(list[i] != gone[j]);
-    rules(list, len2, 1, 0);
+    rules(list, len2, 1, 2700);
     int before[MX_MAX], nb = len2;
     memcpy(before, list, sizeof before);
-    len2 = mx_reroll(lib.v, n, list, len2, struck); /* none struck: all but the album's own anew */
+    /* none struck: all but the album's own anew */
+    len2 = mx_reroll(lib.v, n, list, len2, struck, 2700);
     CHECK(len2 >= nb - 1);
     for (int i = 0; i < len2; ++i)
         for (int j = 0; j < nb; ++j) CHECK(lib.v[list[i]].seed || list[i] != before[j]);
-    rules(list, len2, 1, 0);
+    rules(list, len2, 1, 2700);
 
     /* an artist (all 3 of its albums); and a song, never placed itself */
     unsigned artist = lib.v[seed].artist;
     for (int i = 0; i < n; ++i) lib.v[i].seed = lib.v[i].artist == artist;
     mx_rank(lib.v, n);
-    len = mx_craft(lib.v, n, list, 1);
-    rules(list, len, 1, 1);
+    len = mx_craft(lib.v, n, list, 1, 2700);
+    rules(list, len, 1, 2700);
     for (int i = 0; i < n; ++i) lib.v[i].seed = i == seed;
     mx_rank(lib.v, n);
-    len = mx_craft(lib.v, n, list, 0);
-    rules(list, len, 0, 1);
+    len = mx_craft(lib.v, n, list, 0, 2700);
+    rules(list, len, 0, 2700);
     for (int i = 0; i < len; ++i) CHECK(list[i] != seed);
 
     /* ListenBrainz: two of its picks on the card (one by its second credited artist), one not */
@@ -412,7 +436,7 @@ static void check_library(void) {
     it[2].title = norm_hash("Nowhere", 1), it[2].artist[0] = norm_hash("Nobody", 0),
     it[2].score = 0.8f;
     mx_items(lib.v, n, it, 3, MIX_LB);
-    len = mx_craft(lib.v, n, list, 0);
+    len = mx_craft(lib.v, n, list, 0, 2700);
     CHECK(len == 2);
     int matched = 0;
     for (int i = 0; i < 3; ++i) matched += it[i].matched;
@@ -425,7 +449,7 @@ static void check_library(void) {
         fm[i].artist[0] = norm_hash(name, 0), fm[i].score = 1, fm[i].top = i == 2;
     }
     mx_items(lib.v, n, fm, 3, MIX_LASTFM);
-    len = mx_craft(lib.v, n, list, 0);
+    len = mx_craft(lib.v, n, list, 0, 2700);
     CHECK(len >= 4 && len <= 4 * 2);
     for (int i = 0; i < len; ++i)
         CHECK(lib.v[list[i]].artist == fm[0].artist[0] || lib.v[list[i]].artist == fm[1].artist[0]);
@@ -632,8 +656,8 @@ static void check_app(void) {
     char path[512], c[64];
     pid_t pid = app_start(ROOT, "playlist progress pages library goto field more fav\n");
     ask(ROOT, &r, "menu");
-    CHECK(!strcmp(r.head[1], "ok") && r.rows == 9 && !strcmp(r.f[0][1], "mix") &&
-          !strcmp(r.f[0][4], "most"));
+    CHECK(!strcmp(r.head[1], "ok") && r.rows == 11 && !strcmp(r.f[0][1], "mix") &&
+          !strcmp(r.f[0][4], "shuffle") && !strcmp(r.f[10][3], "45 minutes"));
     ask(ROOT, &r, "nothing");
     CHECK(!strcmp(r.head[1], "unsupported"));
 
@@ -768,6 +792,23 @@ static void check_app(void) {
     for (int i = 1; i < r.rows - 3; ++i)
         CHECK(strstr(r.f[i][3], "Artist 302") || strstr(r.f[i][3], "Artist 303"));
 
+    /* Mix Length: kept on the card, and the next mix made to it */
+    ask(ROOT, &r, "lengths");
+    CHECK(r.rows == 7 && !strcmp(r.f[5][2], "45 minutes") && !strcmp(r.f[5][3], "Chosen") &&
+          !r.f[3][3][0] && !strcmp(r.head[2], "refresh"));
+    ask(ROOT, &r, "length\t20");
+    CHECK(!strcmp(r.head[1], "ok") && !r.head[2][0]);
+    ask(ROOT, &r, "lengths");
+    CHECK(!strcmp(r.f[3][3], "Chosen") && !r.f[5][3][0]);
+    char *lf = slurp(ROOT "/mnt/mmc/.mixtape/length", 0);
+    CHECK(lf && !strcmp(lf, "20\n"));
+    free(lf);
+    ask(ROOT, &r, "length\t7"); /* not a length offered */
+    ask(ROOT, &r, "mix\tshuffle");
+    int min = 0;
+    CHECK(sscanf(strstr(r.f[0][3], "\xc2\xb7 ") + 3, "%d min", &min) == 1 && min >= 17 &&
+          min <= 23);
+
     ask(ROOT, &r, "scan");
     CHECK(!strcmp(r.f[0][2], "Songs heard") && !strcmp(r.f[0][3], "40,000 of 50,000") &&
           find(&r, "Listen Now") >= 0);
@@ -775,6 +816,8 @@ static void check_app(void) {
 
     /* older firmware: no words, no playing or saving through it */
     pid = app_start(ROOT, "");
+    ask(ROOT, &r, "lengths");
+    CHECK(!strcmp(r.f[3][3], "Chosen")); /* read back from the card */
     ask(ROOT, &r, "mix\tnever");
     snprintf(c, sizeof c, "play\t%s", r.f[0][4]);
     ask(ROOT, &r, c);
