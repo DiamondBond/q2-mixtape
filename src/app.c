@@ -382,8 +382,16 @@ static void craft(const char *arg, int again) {
     mx.len = mx_craft(v, n, mx.list, mx.seeded, target);
     for (int i = 0; i < mx.len; ++i) secs += MX_SECS(v[mx.list[i]].sec);
     if (!mx.len || (kind < MIX_LASTFM && mx.len < MX_MIN && 2 * secs < target)) {
+        int any = 0, fits = 0; /* songs for it, and whether any is short enough */
+        for (int i = 0; i < n; ++i)
+            if (v[i].score > 0 && !MX_SHORT(&v[i]))
+                any = 1, fits |= MX_SECS(v[i].sec) <= target + target / 5;
         mx.len = 0;
-        if (kind < MIX_SOUND)
+        if (any && !fits)
+            snprintf(mx.said, sizeof mx.said,
+                     "Its songs are all longer than %d minutes: choose a longer Mix Length",
+                     length_min);
+        else if (kind < MIX_SOUND)
             snprintf(mx.said, sizeof mx.said, "%s", COUNT_EMPTY[kind]);
         else if (kind == MIX_SOUND)
             snprintf(mx.said, sizeof mx.said, "Not enough related music");
@@ -477,6 +485,14 @@ static void page_mix(rep_t *r, const char *arg) {
 /* An action's mix: ctx's gen is the mix's own. */
 static int ours(const char *ctx) { return atoi(ctx) == mx.gen && mx.len && !mx.pending; }
 
+/* How much of s fits in max bytes, cut on a character's boundary. */
+static int cut(const char *s, int max) {
+    int n = (int)strlen(s);
+    if (n <= max) return n;
+    while (max && ((unsigned char)s[max] & 0xc0) == 0x80) --max;
+    return max;
+}
+
 /* A request's stamp for Q2 Pod, new each time: the time and a count. */
 static int stamp(char *o, size_t room) {
     static unsigned seq;
@@ -538,7 +554,8 @@ static void act_reroll(rep_t *r, const char *ctx) {
     }
     char key[sizeof mx.key];
     snprintf(key, sizeof key, "%s", mx.key);
-    if (lib_load(0) && !mx.pending && (lib.gen == mx.libgen || relink())) {
+    int fresh = mx.kind == MIX_SHUFFLE && !memchr(mx.struck, 1, (size_t)mx.len);
+    if (!fresh && lib_load(0) && !mx.pending && (lib.gen == mx.libgen || relink())) {
         int len = mx_reroll(lib.v, lib.n, mx.list, mx.len, mx.struck, length_min * 60);
         if (len) {
             mx.len = len, ++mx.gen;
@@ -546,7 +563,7 @@ static void act_reroll(rep_t *r, const char *ctx) {
             return;
         }
     }
-    craft(key, 1); /* a song gone from the library, or nothing else fit: a new one */
+    craft(key, 1); /* a new shuffle, a song gone from the library, or nothing else fit */
 }
 
 /* A playlist's name from the mix's: "<name> Mixtape <date>", at most 63 bytes (stock's limit),
@@ -613,11 +630,10 @@ static void act_save(rep_t *r, const char *ctx) {
         k += carried(line + k, sizeof line - k - sizeof file - 8);
         k += (size_t)snprintf(line + k, sizeof line - k, "add %s\n", file);
         if (put_file(R(LIBRARY), line, k))
-            snprintf(
-                r->msg, sizeof r->msg,
-                "\xe2\x80\x9c%.44s\xe2\x80\x9d joins Playlists once nothing plays and you've left "
-                "the Library",
-                name);
+            snprintf(r->msg, sizeof r->msg,
+                     "\xe2\x80\x9c%.*s\xe2\x80\x9d joins Playlists once nothing plays and you've "
+                     "left the Library",
+                     cut(name, 44), name);
         else
             snprintf(r->msg, sizeof r->msg, "Can't ask Q2 Pod to add it");
     }
@@ -656,8 +672,7 @@ static void page_lengths(rep_t *r) {
         snprintf(t, sizeof t, "%d minutes", LENGTHS[i]);
         snprintf(c, sizeof c, "%d", LENGTHS[i]);
         row(r, "action", "length", t, LENGTHS[i] == length_min ? "Chosen" : "", c);
-    }
-    snprintf(r->msg, sizeof r->msg, "refresh"); /* the mark moves at once */
+    } /* asked again after each choice, so the mark moves at once */
 }
 
 static void act_length(rep_t *r, const char *ctx) {
@@ -942,8 +957,11 @@ int serve(void) {
     close(s);
     unlink(addr.sun_path);
     unlink(R(STATE));
-    /* stopped, not idle: Q2 Pod, started again (a crash, back from Rockbox), would play a .play
-     * left behind as a new one. Idle, it stays: Now Playing's More Like This needs .playing. */
+    /* Stopped, not idle: Q2 Pod started again (back from Rockbox) would take a .play left behind
+     * for a new one and play the old mix. Idle, it stays, as Q2 Pod writes .playing (More Like
+     * This) only while it is there. ponytail: after a stop that Q2 Pod outlives (USB storage, Stop
+     * Streaming Services) More Like This keeps the song of the stop, and Q2 Pod restarted by a
+     * crash still plays the old mix; the fix is Q2 Pod's, taking each .play's hash at its start. */
     if (quit) unlink(R(PLAY));
     return 0;
 }

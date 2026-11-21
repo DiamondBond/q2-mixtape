@@ -409,8 +409,12 @@ int mx_craft(song_t *v, int n, int *list, int seeded, int target) {
         for (int i = 0; i < n; ++i) eligible += v[i].seed && !MX_SHORT(&v[i]);
         if ((list[0] = mx_seed(v, n, 1)) < 0) return 0;
         v[list[0]].flags = MX_USED;
-        for (int at = 4; eligible >= 3 && at <= 8; at += 4)
-            if ((list[at] = mx_seed(v, n, 0)) >= 0) v[list[at]].flags = MX_USED;
+        int slots = target / MX_GUESS_S; /* about how many songs the length holds */
+        for (int k = 1; eligible >= 3 && k <= 2; ++k) {
+            int at = k * slots / 3;
+            if (at > (k == 1 ? 0 : slots / 3) && at < MX_MAX && (list[at] = mx_seed(v, n, 0)) >= 0)
+                v[list[at]].flags = MX_USED;
+        }
     }
     return fill_to(v, n, list, 0, 0, target);
 }
@@ -431,10 +435,13 @@ int mx_reroll(song_t *v, int n, int *list, int len, unsigned char *struck, int t
             v[list[i]].flags = MX_USED, total += MX_SECS(v[list[i]].sec);
     for (int i = 0; i < len; ++i) { /* a slot gone can leave one artist's songs side by side */
         const song_t *c = list[i] >= 0 ? &v[list[i]] : 0, *prev = k ? &v[list[k - 1]] : 0;
-        if (c && prev && c->artist && c->artist == prev->artist && !(c->seed && prev->seed))
-            v[list[i]].flags = 0, total -= MX_SECS(c->sec);
-        else if (c)
+        if (!c) continue;
+        if (!prev || !c->artist || c->artist != prev->artist || (c->seed && prev->seed))
             list[k++] = list[i];
+        else if (c->seed) /* the seed's own stays */
+            v[list[k - 1]].flags = 0, total -= MX_SECS(prev->sec), list[k - 1] = list[i];
+        else
+            v[list[i]].flags = 0, total -= MX_SECS(c->sec);
     }
     for (int i = k; i < MX_MAX; ++i) list[i] = -1;
     k = fill_to(v, n, list, k, total, target);

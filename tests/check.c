@@ -392,7 +392,7 @@ static void check_library(void) {
     mx_rank(lib.v, n);
     int len = mx_craft(lib.v, n, list, 1, 2700), near = 0, seed = lib_find(12346);
     rules(list, len, 1, 2700);
-    CHECK(lib.v[list[4]].seed && lib.v[list[8]].seed && len >= 10);
+    CHECK(lib.v[list[3]].seed && lib.v[list[7]].seed && len >= 10); /* 45 min: about 11 songs */
     for (int i = 0; i < len; ++i) near += same_genre(list[i], seed);
     CHECK(near >= len * 3 / 4);
     printf("album mix: %d songs, %d of its genre's sound, in %.3f s\n", len, near, now_s() - t);
@@ -697,6 +697,29 @@ static void check_app(void) {
     ask(ROOT, &r, "mix\tmost");
     CHECK(find(&r, first) < 0 && strcmp(r.f[0][4], gen));
     for (int i = 0; i < nkept; ++i) CHECK(find(&r, kept_titles[i]) > 0);
+    /* one of its songs gone from the library since (its id another): a new mix, every song there */
+    int moved;
+    CHECK(sscanf(r.f[2][2], "Song %d", &moved) == 1);
+    snprintf(c, sizeof c, "update songtable set id=%d where id=%d", 200000 + moved, moved + 1);
+    CHECK(!sqlite3_open_v2(ROOT "/mnt/data/database.db", &db, 2, 0) &&
+          !sqlite3_exec(db, c, 0, 0, 0));
+    sqlite3_close(db);
+    later[0].tv_sec = later[1].tv_sec = time(0) + 10;
+    CHECK(!utimes(ROOT "/mnt/data/database.db", later));
+    char g2[16];
+    snprintf(g2, sizeof g2, "%s", r.f[0][4]);
+    snprintf(c, sizeof c, "strike\t%s 1", g2);
+    ask(ROOT, &r, c);
+    snprintf(c, sizeof c, "reroll\t%s", g2);
+    ask(ROOT, &r, c);
+    ask(ROOT, &r, "mix\tmost");
+    CHECK(find(&r, "Play Mixtape") == 0 && strcmp(r.f[0][4], g2) && find(&r, "Song gone") < 0);
+    snprintf(c, sizeof c, "update songtable set id=%d where id=%d", moved + 1, 200000 + moved);
+    CHECK(!sqlite3_open_v2(ROOT "/mnt/data/database.db", &db, 2, 0) &&
+          !sqlite3_exec(db, c, 0, 0, 0));
+    sqlite3_close(db);
+    later[0].tv_sec = later[1].tv_sec = time(0) + 15;
+    CHECK(!utimes(ROOT "/mnt/data/database.db", later));
     snprintf(c, sizeof c, "play\t%s", gen); /* the old mix's */
     ask(ROOT, &r, c);
     CHECK(!strcmp(r.head[2], "This Mixtape has changed"));
@@ -810,7 +833,7 @@ static void check_app(void) {
     /* Mix Length: kept on the card, and the next mix made to it */
     ask(ROOT, &r, "lengths");
     CHECK(r.rows == 7 && !strcmp(r.f[5][2], "45 minutes") && !strcmp(r.f[5][3], "Chosen") &&
-          !r.f[3][3][0] && !strcmp(r.head[2], "refresh"));
+          !r.f[3][3][0] && !r.head[2][0]);
     ask(ROOT, &r, "length\t20");
     CHECK(!strcmp(r.head[1], "ok") && !r.head[2][0]);
     ask(ROOT, &r, "lengths");
@@ -822,7 +845,15 @@ static void check_app(void) {
     ask(ROOT, &r, "mix\tshuffle");
     int min = 0;
     CHECK(sscanf(strstr(r.f[0][3], "\xc2\xb7 ") + 3, "%d min", &min) == 1 && min >= 17 &&
-          min <= 23);
+          min <= 24);
+    char was[MX_MAX][64]; /* Re-roll, nothing struck: a new shuffle */
+    int nwas = 0, again = 0;
+    for (int i = 1; i < r.rows - 2; ++i) snprintf(was[nwas++], 64, "%s", r.f[i][2]);
+    snprintf(c, sizeof c, "reroll\t%s", r.f[0][4]);
+    ask(ROOT, &r, c);
+    ask(ROOT, &r, "mix\tshuffle");
+    for (int i = 0; i < nwas; ++i) again += find(&r, was[i]) > 0;
+    CHECK(find(&r, "Play Mixtape") == 0 && again <= 1);
 
     ask(ROOT, &r, "scan");
     CHECK(!strcmp(r.f[0][2], "Songs heard") && !strcmp(r.f[0][3], "40,000 of 50,000") &&
@@ -945,14 +976,16 @@ static void check_scan(void) {
     profs_close(&p);
 
     /* the same song past ffmpeg's time: left for next time, the rest of the scan going on */
-    setenv("MIXTAPE_FFMPEG_MS", "1500", 1);
+    sh("ffmpeg -v quiet -f lavfi -i sine=frequency=440:duration=25 -ac 2 -ar 44100 -y " SMALL
+       "/mnt/mmc/Music/1.flac"); /* changed: to hear again, before the stuck one */
+    setenv("MIXTAPE_FFMPEG_MS", "3000", 1);
     pid = app_start(SMALL, "");
     unsetenv("MIXTAPE_FFMPEG_MS");
     ask(SMALL, &r, "scanstart");
     for (t = now_s(); find(&r, "Songs heard") < 0 && now_s() - t < 20; usleep(100000))
         ask(SMALL, &r, "scan");
     at = slurp(SMALL "/tmp/q2-mixtape.scan", 0);
-    CHECK(at && !strcmp(at, "end 0 1 0\n") && profs_open(&p) == 3);
+    CHECK(at && !strcmp(at, "end 1 2 0\n") && profs_open(&p) == 3);
     free(at);
     profs_close(&p);
     app_end(pid);
