@@ -44,7 +44,7 @@ Last.fm also needs an API key. If this build has none, Mixtape uses the one unde
 
 ## Listen to Your Music
 
-The sound mixes need each song heard once: 30 seconds from its middle, turned into a short profile of its timbre. **Listen to Your Music → Listen Now** does it on the Q2, in the background and at the lowest priority so playback comes first, and keeps the Q2 awake while it works. A big library takes hours: keep the Q2 charging. **Stop Listening** keeps what has been heard. Next time only the songs not heard yet, and songs that changed, are heard.
+The sound mixes need each song heard once: 30 seconds from its middle, turned into a short profile of its timbre. **Listen to Your Music → Listen Now** does it on the Q2, in the background and at the lowest priority so playback comes first, and keeps the Q2 awake while it works. A big library takes hours: keep the Q2 charging. **Stop Listening** keeps what has been heard. Next time only the songs not heard yet, and songs that changed, are heard. What's heard is used by **From an Album**, **From an Artist** and **More Like This**.
 
 ### Faster, on a computer
 

@@ -857,7 +857,7 @@ static void check_app(void) {
 
     ask(ROOT, &r, "scan");
     CHECK(!strcmp(r.f[0][2], "Songs heard") && !strcmp(r.f[0][3], "40,000 of 50,000") &&
-          find(&r, "Listen Now") >= 0);
+          find(&r, "Listen Now") >= 0 && find(&r, "Heard songs make the sound mixes") == 1);
     app_end(pid);
     CHECK(access(ROOT "/tmp/q2-mixtape.play", 0)); /* stopped: never played again as new */
 
