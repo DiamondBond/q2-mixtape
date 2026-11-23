@@ -21,6 +21,7 @@
 #define MX_GUESS_S 240 /* a song of unknown length */
 #define MX_SECS(sec) ((sec) > 0 ? (sec) : MX_GUESS_S)
 #define MX_SHORT_S 60                                       /* intros and interludes stay out */
+#define MX_LONG_S 1800                                      /* DJ sets and whole works: no fill */
 #define MX_TOP 8                                            /* a slot draws from this many best */
 #define MX_SHORT(s) ((s)->sec > 0 && (s)->sec < MX_SHORT_S) /* sec <= 0: unknown */
 

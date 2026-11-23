@@ -159,7 +159,7 @@ static float apart(const float *w, const prof_t *a, const prof_t *b) {
  * seed of more than MX_REFS heard tracks (an artist's) is measured against MX_REFS of them, drawn
  * at random. */
 void mx_rank(song_t *v, int n) {
-    unsigned artists[16], genres[16];
+    unsigned artists[16], genres[16], various = norm_hash("Various Artists", 0);
     int na = 0, ng = 0, years = 0, nyears = 0, secs = 0, nsecs = 0, nref = 0, heard = 0;
     int ref[MX_REFS];
     float *d = calloc(n + 1, sizeof *d), w[MX_DIMS], sigma = 0, middling = 0.5f;
@@ -169,7 +169,7 @@ void mx_rank(song_t *v, int n) {
         if (!s->seed) continue;
         for (int k = 0; k < 2; ++k) {
             unsigned a = k ? s->album_artist : s->artist;
-            int seen = !a;
+            int seen = !a || (k && a == various); /* a compilation's is no one's */
             for (int j = 0; j < na; ++j) seen |= artists[j] == a;
             if (!seen && na < 16) artists[na++] = a;
         }
@@ -368,14 +368,15 @@ void mx_items(song_t *v, int n, item_t *items, int ni, int kind) {
 /* The song for list[slot] (len slots, -1 empty): one of the MX_TOP best not yet used or struck,
  * drawn by score squared. Rules: a different artist from both neighbours, at most two songs by an
  * artist and one from an album besides the seed's, no second copy of a title by the same artist,
- * and at most room seconds long. -1 when none qualifies. */
+ * and at most room seconds long, and no more than MX_LONG_S. -1 when none qualifies. */
 static int mx_fill(song_t *v, int n, const int *list, int len, int slot, int room) {
     int top[MX_TOP], k = 0;
     const song_t *prev = slot > 0 && list[slot - 1] >= 0 ? &v[list[slot - 1]] : 0,
                  *next = slot + 1 < len && list[slot + 1] >= 0 ? &v[list[slot + 1]] : 0;
     for (int i = 0; i < n; ++i) {
         const song_t *c = &v[i];
-        if (c->seed || c->flags || c->score <= 0 || MX_SECS(c->sec) > room) continue;
+        if (c->seed || c->flags || c->score <= 0 || MX_SECS(c->sec) > room || c->sec > MX_LONG_S)
+            continue;
         if (c->artist &&
             ((prev && prev->artist == c->artist) || (next && next->artist == c->artist)))
             continue;

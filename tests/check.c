@@ -314,6 +314,15 @@ static void check_choosing(void) {
     v[0].seed = 1, v[2].hearts = 5, v[3].hearts = 1;
     mx_rank(v, N);
     CHECK(v[1].score > v[2].score && v[2].score > v[3].score && v[3].score > 0);
+    v[0].album_artist = v[2].album_artist = norm_hash("Various Artists", 0); /* no one's */
+    mx_rank(v, N);
+    CHECK(v[1].score > v[2].score);
+    v[1].sec = 3600; /* the nearest, an hour's set: never a fill, even in an hour's mix */
+    mx_rank(v, N);
+    for (int k = 0; k < 20; ++k) {
+        int mix[MX_MAX], len = mx_craft(v, N, mix, 1, 3600);
+        for (int i = 0; i < len; ++i) CHECK(mix[i] != 1);
+    }
     v[7].prof = 0; /* not heard: last */
     int list[] = { 4, 9, 5, 8, 7, 6 }, want[] = { 4, 5, 6, 8, 9, 7 };
     mx_flow(v, N, list, 6);
@@ -326,6 +335,14 @@ static void check_choosing(void) {
     int none[] = { 9, 4, 6 };
     mx_flow(v, N, none, 3);
     CHECK(none[0] == 9 && none[1] == 4 && none[2] == 6);
+}
+
+/* Whether list's songs fill target seconds, or fall short by a gap no song of 150 s or more fits:
+ * a mix ends as near its length as the songs allow. */
+static int filled(const int *list, int len, int target) {
+    int secs = 0;
+    for (int i = 0; i < len; ++i) secs += MX_SECS(lib.v[list[i]].sec);
+    return secs > target - 150;
 }
 
 static void rules(const int *list, int len, int seeded, int target) {
@@ -431,7 +448,7 @@ static void check_library(void) {
     mx_rank(lib.v, n);
     int len = mx_craft(lib.v, n, list, 1, 2700), near = 0, seed = lib_find(12346);
     rules(list, len, 1, 2700);
-    CHECK(lib.v[list[3]].seed && lib.v[list[7]].seed && len >= 10); /* 45 min: about 11 songs */
+    CHECK(lib.v[list[3]].seed && lib.v[list[7]].seed && filled(list, len, 2700));
     for (int i = 0; i < len; ++i) near += same_genre(list[i], seed);
     CHECK(near >= len * 3 / 4);
     printf("album mix: %d songs, %d of its genre's sound, in %.3f s\n", len, near, now_s() - t);
@@ -440,7 +457,7 @@ static void check_library(void) {
     for (int i = 0; i < len; ++i)
         if (struck[i]) gone[ng++] = list[i];
     int len2 = mx_reroll(lib.v, n, list, len, struck, 2700);
-    CHECK(len2 >= len - 1);
+    CHECK(filled(list, len2, 2700));
     for (int i = 0; i < len2; ++i)
         for (int j = 0; j < ng; ++j) CHECK(list[i] != gone[j]);
     rules(list, len2, 1, 2700);
@@ -448,7 +465,7 @@ static void check_library(void) {
     memcpy(before, list, sizeof before);
     /* none struck: all but the album's own anew */
     len2 = mx_reroll(lib.v, n, list, len2, struck, 2700);
-    CHECK(len2 >= nb - 1);
+    CHECK(filled(list, len2, 2700));
     for (int i = 0; i < len2; ++i)
         for (int j = 0; j < nb; ++j) CHECK(lib.v[list[i]].seed || list[i] != before[j]);
     rules(list, len2, 1, 2700);

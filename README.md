@@ -6,7 +6,7 @@ A card app for the Shanling Q2. Install it from Q2 Pod's App Store, or unzip `mi
 
 ## The mixes
 
-Each mix is as long as **Mix Length** says, from 5 minutes to an hour (45 minutes until you choose; at most 30 songs), and ends as near that length as its songs allow. It is drawn when you open it and kept until you open another, press **Re-roll** or leave Mixtape for ten minutes, with some variety: never the same artist twice in a row, at most two songs by one artist, and at most one from any album but the one it's made from. Songs under a minute are left out, and so are the tracks of a CUE image: a playlist can only name the whole file.
+Each mix is as long as **Mix Length** says, from 5 minutes to an hour (45 minutes until you choose; at most 30 songs), and ends as near that length as its songs allow. It is drawn when you open it and kept until you open another, press **Re-roll** or leave Mixtape for ten minutes, with some variety: never the same artist twice in a row, at most two songs by one artist, and at most one from any album but the one it's made from. Songs under a minute are left out, and so are songs over half an hour but the album's or artist's own (a DJ set would be the whole mix), and the tracks of a CUE image: a playlist can only name the whole file.
 
 ```
 Mixtape
