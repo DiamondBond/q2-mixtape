@@ -380,7 +380,7 @@ static void craft(const char *arg, int again) {
     int n = lib.n;
     int target = length_min * 60, secs = 0;
     mx.len = mx_craft(v, n, mx.list, mx.seeded, target);
-    if (kind < MIX_SHUFFLE) mx_flow(v, n, mx.list, mx.len); /* a re-roll doesn't reorder */
+    if (kind < MIX_SHUFFLE) mx_flow(v, n, mx.list, mx.len);
     for (int i = 0; i < mx.len; ++i) secs += MX_SECS(v[mx.list[i]].sec);
     if (!mx.len || (kind < MIX_LASTFM && mx.len < MX_MIN && 2 * secs < target)) {
         int any = 0, fits = 0; /* songs for it, and whether any is short enough */
@@ -555,10 +555,12 @@ static void act_reroll(rep_t *r, const char *ctx) {
     }
     char key[sizeof mx.key];
     snprintf(key, sizeof key, "%s", mx.key);
-    int fresh = mx.kind == MIX_SHUFFLE && !memchr(mx.struck, 1, (size_t)mx.len);
+    int none = !memchr(mx.struck, 1, (size_t)mx.len), fresh = mx.kind == MIX_SHUFFLE && none;
     if (!fresh && lib_load(0) && !mx.pending && (lib.gen == mx.libgen || relink())) {
         int len = mx_reroll(lib.v, lib.n, mx.list, mx.len, mx.struck, length_min * 60);
         if (len) {
+            if (none && mx.kind < MIX_SHUFFLE) /* all anew; struck ones keep the order */
+                mx_flow(lib.v, lib.n, mx.list, len);
             mx.len = len, ++mx.gen;
             rows_fetch();
             return;

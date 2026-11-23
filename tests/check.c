@@ -394,6 +394,11 @@ static void check_library(void) {
             if (kind == MIX_NEVER || kind == MIX_DEEP) CHECK(!s->plays);
             if (kind == MIX_DEEP) CHECK(played_artist(s->artist));
         }
+        unsigned char none[MX_MAX] = { 0 }; /* re-rolled whole, then in sound order again */
+        len = mx_reroll(lib.v, n, list, len, none, 2700);
+        mx_flow(lib.v, n, list, len);
+        CHECK(len >= MX_MIN);
+        rules(list, len, 0, 2700);
         printf("mix %d: %d songs in %.3f s\n", kind, len, now_s() - t);
     }
     /* Shuffle: any song but a disliked one, a new draw each time, at every length */
