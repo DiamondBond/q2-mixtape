@@ -25,7 +25,7 @@ Mixtape
 
 **Shuffle** draws any songs at random, all but the ones you've given one heart. It and the next four need no listening: those four come from Q2 Pod's play counts and your hearts (rated songs and albums count for more, a one-heart song for much less). Q2 Pod keeps counts for 512 songs, so in a big library **Never Played** means none kept. Once your music is heard (below), those four play in sound order, each song leading into the next.
 
-**From an Album** and **From an Artist** start with one of the album's (or artist's) best-loved songs, put two more of its own a third and two thirds of the way in, and fill the rest with the songs nearest in sound, helped by the tags: the same artist, genre, era and length. Your hearts and plays only break near ties there, so your favourites don't crowd out the songs that sound most alike; a one-heart song still counts for much less. They need your music heard first (below); until then only songs the tags vouch for are used.
+**From an Album** and **From an Artist** start with one of the album's (or artist's) best-loved songs, put two more of its own a third and two thirds of the way in, and fill the rest with songs that share its tags (the genres most of its songs have, the same artist, era and length), the nearest in sound first. Your hearts and plays only break near ties there, so your favourites don't crowd out the songs that sound most alike; a one-heart song still counts for much less. They need your music heard first (below); until then only songs the tags vouch for are used.
 
 While a Mixtape plays, Now Playing's **⋯** has **More Like This**: a mix like the song playing, or like its album or artist.
 

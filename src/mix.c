@@ -111,7 +111,7 @@ int mx_features(const short *pcm, int n, float *out) {
  */
 static const struct {
     float sound, tags, artist, genre, year, length, floor, prefs;
-} W = { 0.7f, 0.3f, 0.3f, 0.4f, 0.15f, 0.05f, 0.3f, 0.1f }; /* prefs: of a favourite's lift */
+} W = { 0.3f, 0.7f, 0.3f, 0.4f, 0.15f, 0.05f, 0.3f, 0.1f }; /* prefs: of a favourite's lift */
 static const float HEARTS[6] = { 1, 0.3f, 0.8f, 1.05f, 1.15f, 1.25f }; /* unrated, then 1-5 */
 
 static float mx_prefs(const song_t *s) {
@@ -152,21 +152,24 @@ static float apart(const float *w, const prof_t *a, const prof_t *b) {
 }
 
 /* Every song's score: a seed track's from the user's hearts and plays alone, any other's from
- * how near it sounds to the nearest seed track and what the tags agree on, the preferences only
+ * how near it sounds to the nearest seed track and what the tags agree on (a genre by the share
+ * of the seed's songs that have it, so one odd track's genre counts little; the era only within
+ * the genre, when the seed has one), the preferences only
  * breaking near ties (W.prefs of a favourite's lift; a dislike in full), so favourites don't
  * crowd out the songs that sound nearest. A song not heard counts as of middling sound and needs
  * the tags' floor, so the mix is never padded with unrelated music; under MX_SHORT_S scores 0. A
  * seed of more than MX_REFS heard tracks (an artist's) is measured against MX_REFS of them, drawn
  * at random. */
 void mx_rank(song_t *v, int n) {
-    unsigned artists[16], genres[16], various = norm_hash("Various Artists", 0);
-    int na = 0, ng = 0, years = 0, nyears = 0, secs = 0, nsecs = 0, nref = 0, heard = 0;
+    unsigned artists[16], genres[16], counts[16], various = norm_hash("Various Artists", 0);
+    int nseed = 0, na = 0, ng = 0, years = 0, nyears = 0, secs = 0, nsecs = 0, nref = 0, heard = 0;
     int ref[MX_REFS];
     float *d = calloc(n + 1, sizeof *d), w[MX_DIMS], sigma = 0, middling = 0.5f;
     int nprof = spread(v, n, w);
     for (int i = 0; i < n; ++i) {
         const song_t *s = &v[i];
         if (!s->seed) continue;
+        ++nseed;
         for (int k = 0; k < 2; ++k) {
             unsigned a = k ? s->album_artist : s->artist;
             int seen = !a || (k && a == various); /* a compilation's is no one's */
@@ -174,9 +177,10 @@ void mx_rank(song_t *v, int n) {
             if (!seen && na < 16) artists[na++] = a;
         }
         for (int k = 0; k < 4 && s->genre[k]; ++k) {
-            int seen = 0;
-            for (int j = 0; j < ng; ++j) seen |= genres[j] == s->genre[k];
-            if (!seen && ng < 16) genres[ng++] = s->genre[k];
+            int j = 0;
+            while (j < ng && genres[j] != s->genre[k]) ++j;
+            if (j == ng && ng < 16) genres[ng] = s->genre[k], counts[ng++] = 0;
+            if (j < ng) ++counts[j];
         }
         if (s->year > 0) years += s->year, ++nyears;
         if (s->sec > 0) secs += s->sec, ++nsecs;
@@ -211,15 +215,19 @@ void mx_rank(song_t *v, int n) {
             continue;
         }
         float m = 0, sound = middling, p = mx_prefs(s);
-        int same = 0, shared = 0, mine = 0;
+        float share = 0; /* of the seed's songs, the most that have one of its genres */
+        int same = 0;
         for (int j = 0; j < na; ++j)
             same |= (s->artist && artists[j] == s->artist) ||
                     (s->album_artist && artists[j] == s->album_artist);
-        for (int k = 0; k < 4 && s->genre[k]; ++k, ++mine)
-            for (int j = 0; j < ng; ++j) shared += genres[j] == s->genre[k];
+        for (int k = 0; k < 4 && s->genre[k]; ++k)
+            for (int j = 0; j < ng; ++j)
+                if (genres[j] == s->genre[k] && (float)counts[j] / nseed > share)
+                    share = (float)counts[j] / nseed;
         if (same) m += W.artist;
-        if (mine + ng - shared) m += W.genre * shared / (mine + ng - shared);
-        if (year && s->year > 0 && s->year - year <= 5 && year - s->year <= 5) m += W.year;
+        m += W.genre * share;
+        if (year && s->year > 0 && s->year - year <= 5 && year - s->year <= 5)
+            m += W.year * (ng ? share : 1);
         if (sec && s->sec > 0 && 2 * s->sec >= sec && s->sec <= 2 * sec) m += W.length;
         if (sigma > 0 && s->prof)
             sound = 1 / (1 + s->score / sigma);
