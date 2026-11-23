@@ -961,11 +961,12 @@ int serve(void) {
     close(s);
     unlink(addr.sun_path);
     unlink(R(STATE));
-    /* Stopped, not idle: Q2 Pod started again (back from Rockbox) would take a .play left behind
-     * for a new one and play the old mix. Idle, it stays, as Q2 Pod writes .playing (More Like
-     * This) only while it is there. ponytail: after a stop that Q2 Pod outlives (USB storage, Stop
-     * Streaming Services) More Like This keeps the song of the stop, and Q2 Pod restarted by a
-     * crash still plays the old mix; the fix is Q2 Pod's, taking each .play's hash at its start. */
-    if (quit) unlink(R(PLAY));
+    /* Stopped, not idle, where the firmware doesn't list playkept: Q2 Pod started again (back from
+     * Rockbox) would take a .play left behind for a new one and play the old mix. Idle, or with
+     * playkept, it stays, as Q2 Pod writes .playing (More Like This) only while it is there.
+     * ponytail: without playkept, after a stop that Q2 Pod outlives (USB storage, Stop Streaming
+     * Services) More Like This keeps the song of the stop, and Q2 Pod restarted by a crash still
+     * plays the old mix; firmware with playkept fixes both. */
+    if (quit && !has_cap("playkept")) unlink(R(PLAY));
     return 0;
 }

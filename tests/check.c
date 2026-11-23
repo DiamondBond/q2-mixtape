@@ -707,7 +707,7 @@ static void app_end(pid_t pid) {
 static void check_app(void) {
     reply_t r = { 0 };
     char path[512], c[64];
-    pid_t pid = app_start(ROOT, "playlist progress pages library goto field more fav\n");
+    pid_t pid = app_start(ROOT, "playlist progress pages library goto field more fav playkept\n");
     ask(ROOT, &r, "menu");
     CHECK(!strcmp(r.head[1], "ok") && r.rows == 11 && !strcmp(r.f[0][1], "mix") &&
           !strcmp(r.f[0][4], "shuffle") && !strcmp(r.f[10][3], "45 minutes"));
@@ -915,7 +915,7 @@ static void check_app(void) {
     CHECK(!strcmp(r.f[0][2], "Songs heard") && !strcmp(r.f[0][3], "40,000 of 50,000") &&
           find(&r, "Listen Now") >= 0 && find(&r, "Heard songs make the sound mixes") == 1);
     app_end(pid);
-    CHECK(access(ROOT "/tmp/q2-mixtape.play", 0)); /* stopped: never played again as new */
+    CHECK(!access(ROOT "/tmp/q2-mixtape.play", 0)); /* playkept: Q2 Pod plays only a new one */
 
     /* older firmware: no words, no playing or saving through it */
     pid = app_start(ROOT, "");
@@ -932,6 +932,7 @@ static void check_app(void) {
     ask(ROOT, &r, "lastfm");
     CHECK(!strcmp(r.f[0][0], "info"));
     app_end(pid);
+    CHECK(access(ROOT "/tmp/q2-mixtape.play", 0)); /* stopped: never played again as new */
     free(r.buf);
 }
 
