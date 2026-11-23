@@ -145,6 +145,7 @@ void mx_rank(song_t *v, int n);
 void mx_counts(song_t *v, int n, int kind);
 void mx_items(song_t *v, int n, item_t *items, int ni, int kind);
 int mx_craft(song_t *v, int n, int *list, int seeded, int target);
+void mx_flow(const song_t *v, int n, int *list, int len);
 int mx_reroll(song_t *v, int n, int *list, int len, unsigned char *struck, int target);
 
 /* scan.c */

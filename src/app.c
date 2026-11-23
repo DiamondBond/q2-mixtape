@@ -380,6 +380,7 @@ static void craft(const char *arg, int again) {
     int n = lib.n;
     int target = length_min * 60, secs = 0;
     mx.len = mx_craft(v, n, mx.list, mx.seeded, target);
+    if (kind < MIX_SHUFFLE) mx_flow(v, n, mx.list, mx.len); /* a re-roll doesn't reorder */
     for (int i = 0; i < mx.len; ++i) secs += MX_SECS(v[mx.list[i]].sec);
     if (!mx.len || (kind < MIX_LASTFM && mx.len < MX_MIN && 2 * secs < target)) {
         int any = 0, fits = 0; /* songs for it, and whether any is short enough */

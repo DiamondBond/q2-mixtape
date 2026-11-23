@@ -300,6 +300,34 @@ static int played_artist(unsigned artist) {
 
 /* The variety rules every mix keeps; a timed one (target > 0) at most a fifth over target seconds,
  * and short of it by less than half a song, most of the synthetic songs being 150 to 349 s. */
+/* Songs heard along one dimension, each its own artist and album: seed 0 at 0, 1 near at 1, 2 a
+ * favourite at 1.1, 3 a dislike at 0.5, the rest at i - 2. A favourite breaks near ties only (at
+ * its full lift, 2 would win), a dislike counts in full; a play-count mix in sound order. */
+static void check_choosing(void) {
+    enum { N = 24 };
+    static song_t v[N];
+    static prof_t p[N];
+    for (int i = 0; i < N; ++i) {
+        p[i].status = MX_OK, p[i].f[0] = i < 4 ? (float[]){ 0, 1, 1.1f, 0.5f }[i] : (float)(i - 2);
+        v[i].prof = &p[i], v[i].sec = 200, v[i].artist = v[i].album = (unsigned)i + 1;
+    }
+    v[0].seed = 1, v[2].hearts = 5, v[3].hearts = 1;
+    mx_rank(v, N);
+    CHECK(v[1].score > v[2].score && v[2].score > v[3].score && v[3].score > 0);
+    v[7].prof = 0; /* not heard: last */
+    int list[] = { 4, 9, 5, 8, 7, 6 }, want[] = { 4, 5, 6, 8, 9, 7 };
+    mx_flow(v, N, list, 6);
+    for (int i = 0; i < 6; ++i) CHECK(list[i] == want[i]);
+    v[12].artist = v[14].artist; /* 14 left after 12, its artist's: first */
+    int pair[] = { 13, 12, 14 }, pair_want[] = { 14, 13, 12 };
+    mx_flow(v, N, pair, 3);
+    for (int i = 0; i < 3; ++i) CHECK(pair[i] == pair_want[i]);
+    for (int i = 0; i < N; ++i) v[i].prof = 0; /* nothing heard: the order drawn */
+    int none[] = { 9, 4, 6 };
+    mx_flow(v, N, none, 3);
+    CHECK(none[0] == 9 && none[1] == 4 && none[2] == 6);
+}
+
 static void rules(const int *list, int len, int seeded, int target) {
     int total = 0;
     for (int i = 0; i < len; ++i) {
@@ -349,7 +377,13 @@ static void check_library(void) {
     for (int kind = MIX_MOST; kind <= MIX_DEEP; ++kind) {
         t = now_s();
         mx_counts(lib.v, n, kind);
-        int len = mx_craft(lib.v, n, list, 0, 2700);
+        int len = mx_craft(lib.v, n, list, 0, 2700), drawn[MX_MAX];
+        memcpy(drawn, list, sizeof drawn);
+        mx_flow(lib.v, n, list, len); /* in sound order: the same songs, the rules kept */
+        for (int i = 0, in; i < len; ++i) {
+            for (int j = in = 0; j < len; ++j) in |= drawn[j] == list[i];
+            CHECK(in);
+        }
         CHECK(len >= MX_MIN);
         rules(list, len, 0, 2700);
         for (int i = 0; i < len; ++i) {
@@ -1050,6 +1084,7 @@ int main(int argc, char **argv) {
     setvbuf(stdout, 0, _IONBF, 0);
     check_json();
     check_features();
+    check_choosing();
     check_library();
     web_start();
     check_net();

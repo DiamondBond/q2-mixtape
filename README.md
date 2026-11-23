@@ -23,9 +23,9 @@ Mixtape
 └── Mix Length              5, 10, 15, 20, 30, 45 or 60 minutes
 ```
 
-**Shuffle** draws any songs at random, all but the ones you've given one heart. It and the next four need no listening: those four come from Q2 Pod's play counts and your hearts (rated songs and albums count for more, a one-heart song for much less). Q2 Pod keeps counts for 512 songs, so in a big library **Never Played** means none kept.
+**Shuffle** draws any songs at random, all but the ones you've given one heart. It and the next four need no listening: those four come from Q2 Pod's play counts and your hearts (rated songs and albums count for more, a one-heart song for much less). Q2 Pod keeps counts for 512 songs, so in a big library **Never Played** means none kept. Once your music is heard (below), those four play in sound order, each song leading into the next.
 
-**From an Album** and **From an Artist** start with one of the album's (or artist's) best-loved songs, put two more of its own a third and two thirds of the way in, and fill the rest with the songs nearest in sound, helped by the tags: the same artist, genre, era and length. They need your music heard first (below); until then only songs the tags vouch for are used.
+**From an Album** and **From an Artist** start with one of the album's (or artist's) best-loved songs, put two more of its own a third and two thirds of the way in, and fill the rest with the songs nearest in sound, helped by the tags: the same artist, genre, era and length. Your hearts and plays only break near ties there, so your favourites don't crowd out the songs that sound most alike; a one-heart song still counts for much less. They need your music heard first (below); until then only songs the tags vouch for are used.
 
 While a Mixtape plays, Now Playing's **⋯** has **More Like This**: a mix like the song playing, or like its album or artist.
 
@@ -44,7 +44,7 @@ Last.fm also needs an API key. If this build has none, Mixtape uses the one unde
 
 ## Listen to Your Music
 
-The sound mixes need each song heard once: 30 seconds from its middle, turned into a short profile of its timbre. **Listen to Your Music → Listen Now** does it on the Q2, in the background and at the lowest priority so playback comes first, and keeps the Q2 awake while it works. A big library takes hours: keep the Q2 charging. **Stop Listening** keeps what has been heard. Next time only the songs not heard yet, and songs that changed, are heard. What's heard is used by **From an Album**, **From an Artist** and **More Like This**.
+The sound mixes need each song heard once: 30 seconds from its middle, turned into a short profile of its timbre. **Listen to Your Music → Listen Now** does it on the Q2, in the background and at the lowest priority so playback comes first, and keeps the Q2 awake while it works. A big library takes hours: keep the Q2 charging. **Stop Listening** keeps what has been heard. Next time only the songs not heard yet, and songs that changed, are heard. What's heard is used by **From an Album**, **From an Artist** and **More Like This**, and puts the play-count mixes in sound order.
 
 ### Faster, on a computer
 

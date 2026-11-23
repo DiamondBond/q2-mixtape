@@ -110,8 +110,8 @@ int mx_features(const short *pcm, int n, float *out) {
 /* ponytail: hand-tuned by listening; the knobs if mixes wander (sound) or stay too close (artist).
  */
 static const struct {
-    float sound, tags, artist, genre, year, length, floor;
-} W = { 0.7f, 0.3f, 0.3f, 0.4f, 0.15f, 0.05f, 0.3f };
+    float sound, tags, artist, genre, year, length, floor, prefs;
+} W = { 0.7f, 0.3f, 0.3f, 0.4f, 0.15f, 0.05f, 0.3f, 0.1f }; /* prefs: of a favourite's lift */
 static const float HEARTS[6] = { 1, 0.3f, 0.8f, 1.05f, 1.15f, 1.25f }; /* unrated, then 1-5 */
 
 static float mx_prefs(const song_t *s) {
@@ -126,23 +126,46 @@ static int by_float(const void *a, const void *b) {
     return (x > y) - (x < y);
 }
 
+/* Each dimension's weight into w: 1 / its variance over the songs heard, so each counts by its
+ * spread across the library (z-scores; the means cancel). Returns how many are heard. */
+static int spread(const song_t *v, int n, float *w) {
+    float mean[MX_DIMS] = { 0 };
+    int heard = 0;
+    memset(w, 0, MX_DIMS * sizeof *w);
+    for (int i = 0; i < n; ++i) {
+        if (!v[i].prof) continue;
+        ++heard;
+        for (int k = 0; k < MX_DIMS; ++k)
+            mean[k] += v[i].prof->f[k], w[k] += v[i].prof->f[k] * v[i].prof->f[k];
+    }
+    for (int k = 0; heard > 1 && k < MX_DIMS; ++k) {
+        float m = mean[k] / heard, var = w[k] / heard - m * m;
+        w[k] = var > 1e-6f ? 1 / var : 0;
+    }
+    return heard;
+}
+/* How far apart two profiles sound: the weighed squared distance. */
+static float apart(const float *w, const prof_t *a, const prof_t *b) {
+    float d = 0;
+    for (int k = 0; k < MX_DIMS; ++k) d += w[k] * (a->f[k] - b->f[k]) * (a->f[k] - b->f[k]);
+    return d;
+}
+
 /* Every song's score: a seed track's from the user's hearts and plays alone, any other's from
- * how near it sounds to the nearest seed track and what the tags agree on, times the same
- * preferences. A song not heard counts as of middling sound and needs the tags' floor, so the mix
- * is never padded with unrelated music; under MX_SHORT_S scores 0. A seed of more than MX_REFS
- * heard tracks (an artist's) is measured against MX_REFS of them, drawn at random. */
+ * how near it sounds to the nearest seed track and what the tags agree on, the preferences only
+ * breaking near ties (W.prefs of a favourite's lift; a dislike in full), so favourites don't
+ * crowd out the songs that sound nearest. A song not heard counts as of middling sound and needs
+ * the tags' floor, so the mix is never padded with unrelated music; under MX_SHORT_S scores 0. A
+ * seed of more than MX_REFS heard tracks (an artist's) is measured against MX_REFS of them, drawn
+ * at random. */
 void mx_rank(song_t *v, int n) {
     unsigned artists[16], genres[16];
-    int na = 0, ng = 0, years = 0, nyears = 0, secs = 0, nsecs = 0, nref = 0, nprof = 0, heard = 0;
+    int na = 0, ng = 0, years = 0, nyears = 0, secs = 0, nsecs = 0, nref = 0, heard = 0;
     int ref[MX_REFS];
-    float *d = calloc(n + 1, sizeof *d), w[MX_DIMS] = { 0 }, mean[MX_DIMS] = { 0 }, sigma = 0;
+    float *d = calloc(n + 1, sizeof *d), w[MX_DIMS], sigma = 0, middling = 0.5f;
+    int nprof = spread(v, n, w);
     for (int i = 0; i < n; ++i) {
         const song_t *s = &v[i];
-        if (s->prof) {
-            ++nprof;
-            for (int k = 0; k < MX_DIMS; ++k)
-                mean[k] += s->prof->f[k], w[k] += s->prof->f[k] * s->prof->f[k];
-        }
         if (!s->seed) continue;
         for (int k = 0; k < 2; ++k) {
             unsigned a = k ? s->album_artist : s->artist;
@@ -163,28 +186,22 @@ void mx_rank(song_t *v, int n) {
     }
     for (int i = 0; !nref && i < n; ++i) /* a seed of short tracks: those */
         if (v[i].seed && v[i].prof && nref < MX_REFS) ref[nref++] = i;
-    /* every dimension weighed by its spread across the library (z-scores; the means cancel) */
-    for (int k = 0; nprof > 1 && k < MX_DIMS; ++k) {
-        float m = mean[k] / nprof, var = w[k] / nprof - m * m;
-        w[k] = var > 1e-6f ? 1 / var : 0;
-    }
     int nd = 0;
     for (int i = 0; d && nref && nprof > 1 && i < n; ++i) {
         song_t *s = &v[i];
         if (s->seed || !s->prof) continue;
         float best = 1e30f;
         for (int r = 0; r < nref; ++r) {
-            const float *a = s->prof->f, *b = v[ref[r]].prof->f;
-            float dist = 0;
-            for (int k = 0; k < MX_DIMS; ++k) dist += w[k] * (a[k] - b[k]) * (a[k] - b[k]);
+            float dist = apart(w, s->prof, v[ref[r]].prof);
             if (dist < best) best = dist;
         }
         s->score = best; /* for now: the squared distance */
         d[nd++] = best;
     }
-    if (nd) { /* the median distance is a similarity of one half */
+    if (nd) { /* a similarity of one half where a tenth are nearer, so the nearest stand out */
         qsort(d, nd, sizeof *d, by_float);
-        sigma = d[nd / 2] > 1e-6f ? d[nd / 2] : 1e-6f;
+        sigma = d[nd / 10] > 1e-6f ? d[nd / 10] : 1e-6f;
+        middling = 1 / (1 + d[nd / 2] / sigma); /* the median song's */
     }
     int year = nyears ? years / nyears : 0, sec = nsecs ? secs / nsecs : 0;
     for (int i = 0; i < n; ++i) {
@@ -193,7 +210,7 @@ void mx_rank(song_t *v, int n) {
             s->score = mx_prefs(s);
             continue;
         }
-        float m = 0, sound = 0.5f;
+        float m = 0, sound = middling, p = mx_prefs(s);
         int same = 0, shared = 0, mine = 0;
         for (int j = 0; j < na; ++j)
             same |= (s->artist && artists[j] == s->artist) ||
@@ -208,9 +225,39 @@ void mx_rank(song_t *v, int n) {
             sound = 1 / (1 + s->score / sigma);
         else if (m < W.floor)
             m = -1; /* not heard, and the tags don't vouch for it */
-        s->score = MX_SHORT(s) || m < 0 ? 0 : (W.sound * sound + W.tags * m) * mx_prefs(s);
+        if (p > 1) p = 1 + W.prefs * (p - 1);
+        s->score = MX_SHORT(s) || m < 0 ? 0 : (W.sound * sound + W.tags * m) * p;
     }
     free(d);
+}
+
+/* A play-count mix's len songs in list put in sound order, each leading into the next: after the
+ * first, the nearest to the one before of those left by another artist, a song not heard as far
+ * from all. A last song left of the one before's artist goes first instead (an artist has two at
+ * most). No song changes; nothing heard, no order changes either.
+ * ponytail: greedy, so the last songs left can be far apart; a 2-opt pass evens them out. */
+void mx_flow(const song_t *v, int n, int *list, int len) {
+    float w[MX_DIMS];
+    if (len < 3 || spread(v, n, w) < 2) return;
+    for (int i = 1; i < len; ++i) {
+        const song_t *prev = &v[list[i - 1]];
+        int pick = -1;
+        float near = 0;
+        for (int j = i; j < len; ++j) {
+            const song_t *c = &v[list[j]];
+            float d = prev->prof && c->prof ? apart(w, prev->prof, c->prof) : 1e30f;
+            if ((!c->artist || c->artist != prev->artist) && (pick < 0 || d < near))
+                pick = j, near = d;
+        }
+        int song = list[pick < 0 ? i : pick];
+        if (pick < 0) {
+            memmove(list + 1, list, (size_t)i * sizeof *list);
+            list[0] = song;
+            break;
+        }
+        memmove(list + i + 1, list + i, (size_t)(pick - i) * sizeof *list);
+        list[i] = song;
+    }
 }
 
 typedef struct {
