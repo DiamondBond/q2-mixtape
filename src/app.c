@@ -215,8 +215,8 @@ static void net_take(net_t *out) {
 /* ---- Mixes -------------------------------------------------------------------------------- */
 
 static struct {
-    char key[48];   /* the mix op's argument: "most", "album 1a2b3c4d", "song 812", "lastfm" */
-    char name[128]; /* what it is made from: "Most Played", an album's name */
+    char key[48];   /* the mix op's argument: "deep", "album 1a2b3c4d", "song 812", "lastfm" */
+    char name[128]; /* what it is made from: "Deep Cuts", an album's name */
     int kind, gen, libgen, len, seeded, pending;
     int list[MX_MAX];    /* into lib.v as read at libgen */
     unsigned id[MX_MAX]; /* the songs' ids, which outlast a read */
@@ -229,11 +229,10 @@ static struct {
     net_t net;      /* the recommendations it is made from */
 } mx;
 
-static const char *const COUNTS[] = { "most", "forgotten", "never", "deep", "shuffle" };
-static const char *const COUNT_NAMES[] = { "Most Played", "Forgotten Favourites", "Never Played",
-                                           "Deep Cuts", "Shuffle" };
+static const char *const COUNTS[] = { "forgotten", "never", "deep", "shuffle" };
+static const char *const COUNT_NAMES[] = { "Forgotten Favourites", "Never Played", "Deep Cuts",
+                                           "Shuffle" };
 static const char *const COUNT_EMPTY[] = {
-    "Play some music first: this mix is made from play counts",
     "Nothing forgotten yet: songs played or loved a while ago",
     "Every song has a play counted",
     "Play some music first: this mix is made from play counts",
@@ -655,7 +654,7 @@ static void page_menu(rep_t *r) {
     else if (scanning)
         snprintf(sub, sizeof sub, "Checking your songs\xe2\x80\xa6");
     row(r, "list", "mix", "Shuffle", "Any songs from your Library", "shuffle");
-    row(r, "list", "played", "Most Played", "Pick a song to mix from", "");
+    row(r, "list", "played", "Most Played", "Your most played songs", "");
     row(r, "list", "mix", "Forgotten Favourites", "Loved or played a lot, but not lately",
         "forgotten");
     row(r, "list", "mix", "Never Played", "Songs with no play counted", "never");
@@ -714,7 +713,7 @@ static void song_row(rep_t *r, void *db, const song_t *s, const char *note) {
     char path[1024], title[128], artist[128], sub[300], c[24];
     if (!song_text(db, s->id, path, sizeof path, title, sizeof title, artist, sizeof artist))
         return;
-    snprintf(sub, sizeof sub, "%s%s%s", artist, artist[0] && note[0] ? ", " : "", note);
+    snprintf(sub, sizeof sub, "%s%s%s", artist, artist[0] && note[0] ? " \xc2\xb7 " : "", note);
     snprintf(c, sizeof c, "song %u", s->id);
     row(r, "list", "mix", title, sub, c);
 }
@@ -742,9 +741,10 @@ static int by_plays(const void *a, const void *b) {
 }
 
 /* Most Played: the songs with a count, the most played first (the newest first among equals),
- * a window of ROWS from the cursor. Q2 Pod keeps 512 counts. */
+ * a window of ROWS from the cursor. Q2 Pod keeps 512 counts, read again for the first window only,
+ * so the later ones follow the same order. */
 static void page_played(rep_t *r, const char *cursor) {
-    if (!lib_load(1)) {
+    if (!lib_load(!atoi(cursor))) {
         info(r, "No Library yet: run Update Library", "");
         return;
     }
@@ -757,7 +757,8 @@ static void page_played(rep_t *r, const char *cursor) {
     void *db = db_open();
     int i = off;
     for (char note[24]; i < n && r->count < ROWS; ++i)
-        snprintf(note, sizeof note, "%u plays", lib.v[o[i]].plays),
+        snprintf(note, sizeof note, "%u play%s", lib.v[o[i]].plays,
+                 lib.v[o[i]].plays > 1 ? "s" : ""),
             song_row(r, db, &lib.v[o[i]], note);
     if (db) db_close(db);
     free(o);
@@ -767,6 +768,7 @@ static void page_played(rep_t *r, const char *cursor) {
 
 typedef struct {
     rep_t *r;
+    void *db;
     const char *text;
 } find_t;
 /* A song whose title has the text, listed while the rows last (db_page's row callback). */
@@ -774,14 +776,8 @@ static int song_found(void *ctx, void *st) {
     find_t *f = ctx;
     int at = lib_find((unsigned)col_i(st, 0));
     const char *title = col_s(st, 1);
-    if (at >= 0 &&
-        strcasestr(title[0] && strcmp(title, "(null)") ? title : col_s(st, 3), f->text)) {
-        char c[24], artist[128];
-        snprintf(c, sizeof c, "song %u", lib.v[at].id);
-        snprintf(artist, sizeof artist, "%s", strcmp(col_s(st, 2), "(null)") ? col_s(st, 2) : "");
-        row(f->r, "list", "mix", title[0] && strcmp(title, "(null)") ? title : col_s(st, 3), artist,
-            c);
-    }
+    if (at >= 0 && strcasestr(title[0] && strcmp(title, "(null)") ? title : col_s(st, 2), f->text))
+        song_row(f->r, f->db, &lib.v[at], "");
     return f->r->count >= ROWS;
 }
 
@@ -807,10 +803,10 @@ static void page_search(rep_t *r, const char *text) {
                     c);
     void *db = db_open();
     unsigned last = 0;
-    find_t f = { r, text };
+    find_t f = { r, db, text };
     if (db)
         db_page(db,
-                "select id,name,songer,filename from songtable where id>? and " MUSIC_SQL
+                "select id,name,filename from songtable where id>? and " MUSIC_SQL
                 " order by id limit 500",
                 &last, song_found, &f),
             db_close(db);
@@ -848,7 +844,7 @@ static void page_scan(rep_t *r) {
     for (int i = 0; i < n; ++i) heard += profs_find(&lib.profs, lib.v[i].pkey) != 0; /* or tried */
     snprintf(sub, sizeof sub, "%s of %s", commas(heard, a), commas(n, b));
     info(r, "Songs heard", sub);
-    info(r, "Heard songs make the sound mixes", "From an Album, From an Artist, More Like This");
+    info(r, "Heard songs make the sound mixes", "From an Album, Artist or Song, More Like This");
     static const char *const ENDS[] = { [END_CARD] = "Stopped: the card went away",
                                         [END_FFMPEG] = "Stopped: this Q2 has no ffmpeg",
                                         [END_LIBRARY] = "Stopped: the Library was updating",

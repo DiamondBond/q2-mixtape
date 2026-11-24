@@ -94,7 +94,7 @@ typedef struct {
     char said[120]; /* why there are none, or "" */
 } net_t;
 
-enum { MIX_MOST, MIX_FORGOTTEN, MIX_NEVER, MIX_DEEP, MIX_SHUFFLE, MIX_SOUND, MIX_LASTFM, MIX_LB };
+enum { MIX_FORGOTTEN, MIX_NEVER, MIX_DEEP, MIX_SHUFFLE, MIX_SOUND, MIX_LASTFM, MIX_LB };
 
 /* Paths: under MIXTAPE_ROOT on a computer (the checks), as they are on the Q2 otherwise. */
 const char *R(const char *path);

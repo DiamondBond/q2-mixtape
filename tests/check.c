@@ -391,7 +391,7 @@ static void check_library(void) {
 
     int list[MX_MAX];
     unsigned char struck[MX_MAX] = { 0 };
-    for (int kind = MIX_MOST; kind <= MIX_DEEP; ++kind) {
+    for (int kind = MIX_FORGOTTEN; kind <= MIX_DEEP; ++kind) {
         t = now_s();
         mx_counts(lib.v, n, kind);
         int len = mx_craft(lib.v, n, list, 0, 2700), drawn[MX_MAX];
@@ -405,7 +405,6 @@ static void check_library(void) {
         rules(list, len, 0, 2700);
         for (int i = 0; i < len; ++i) {
             const song_t *s = &lib.v[list[i]];
-            if (kind == MIX_MOST) CHECK(s->plays >= 100); /* the 512 counted, the most first */
             if (kind == MIX_FORGOTTEN)
                 CHECK((s->plays >= 3 || s->hearts >= 4) && (s->recency < 0 || s->recency >= 100));
             if (kind == MIX_NEVER || kind == MIX_DEEP) CHECK(!s->plays);
@@ -719,12 +718,12 @@ static void check_app(void) {
 
     /* no database for a moment (an Update Library): said, and tried again at the next open */
     CHECK(!rename(ROOT "/mnt/data/database.db", ROOT "/mnt/data/away.db"));
-    ask(ROOT, &r, "mix\tmost");
+    ask(ROOT, &r, "mix\tforgotten");
     CHECK(r.rows == 1 && !strcmp(r.f[0][2], "No Library yet: run Update Library") && !r.head[2][0]);
     CHECK(!rename(ROOT "/mnt/data/away.db", ROOT "/mnt/data/database.db"));
     double t = now_s();
-    ask(ROOT, &r, "mix\tmost");
-    printf("app: Most Played crafted in %.2f s, the library read included\n", now_s() - t);
+    ask(ROOT, &r, "mix\tforgotten");
+    printf("app: Forgotten Favourites crafted in %.2f s, the library read included\n", now_s() - t);
     CHECK(!strcmp(r.head[2], "refresh") && !strcmp(r.f[0][2], "Play Mixtape") &&
           r.rows >= MX_MIN + 3);
     CHECK(find(&r, "Re-roll") == r.rows - 2 && find(&r, "Save as Playlist") == r.rows - 1);
@@ -733,12 +732,12 @@ static void check_app(void) {
     snprintf(first, sizeof first, "%s", r.f[1][2]);
     snprintf(ctx, sizeof ctx, "%s", r.f[1][4]);
     CHECK(strstr(r.f[1][3], "Artist ") && strstr(r.f[1][3], ":"));
-    ask(ROOT, &r, "mix\tmost"); /* the refresh: the same mix */
+    ask(ROOT, &r, "mix\tforgotten"); /* the refresh: the same mix */
     CHECK(!strcmp(r.f[1][2], first) && !strcmp(r.f[0][4], gen));
     snprintf(c, sizeof c, "strike\t%s", ctx);
     ask(ROOT, &r, c);
     CHECK(!strcmp(r.head[1], "ok") && !r.head[2][0]);
-    ask(ROOT, &r, "mix\tmost");
+    ask(ROOT, &r, "mix\tforgotten");
     CHECK(!strcmp(r.f[1][3], "Struck \xc2\xb7 Re-roll replaces it") &&
           !strcmp(r.f[r.rows - 2][3], "New songs for the struck ones"));
     char kept_titles[MX_MAX][64];
@@ -753,7 +752,7 @@ static void check_app(void) {
     CHECK(!utimes(ROOT "/mnt/data/database.db", later));
     snprintf(c, sizeof c, "reroll\t%s", gen);
     ask(ROOT, &r, c);
-    ask(ROOT, &r, "mix\tmost");
+    ask(ROOT, &r, "mix\tforgotten");
     CHECK(find(&r, first) < 0 && strcmp(r.f[0][4], gen));
     for (int i = 0; i < nkept; ++i) CHECK(find(&r, kept_titles[i]) > 0);
     /* one of its songs gone from the library since (its id another): a new mix, every song there */
@@ -771,7 +770,7 @@ static void check_app(void) {
     ask(ROOT, &r, c);
     snprintf(c, sizeof c, "reroll\t%s", g2);
     ask(ROOT, &r, c);
-    ask(ROOT, &r, "mix\tmost");
+    ask(ROOT, &r, "mix\tforgotten");
     CHECK(find(&r, "Play Mixtape") == 0 && strcmp(r.f[0][4], g2) && find(&r, "Song gone") < 0);
     snprintf(c, sizeof c, "update songtable set id=%d where id=%d", moved + 1, 200000 + moved);
     CHECK(!sqlite3_open_v2(ROOT "/mnt/data/database.db", &db, 2, 0) &&
@@ -782,7 +781,7 @@ static void check_app(void) {
     snprintf(c, sizeof c, "play\t%s", gen); /* the old mix's */
     ask(ROOT, &r, c);
     CHECK(!strcmp(r.head[2], "This Mixtape has changed"));
-    ask(ROOT, &r, "mix\tmost");
+    ask(ROOT, &r, "mix\tforgotten");
     snprintf(gen, sizeof gen, "%s", r.f[0][4]);
     int songs = r.rows - 3, gone;
     char gone_path[256], gone_full[320];
@@ -805,15 +804,17 @@ static void check_app(void) {
     free(m3u);
     char kept[32];
     snprintf(kept, sizeof kept, "%d songs \xc2\xb7 ", songs - 1);
-    ask(ROOT, &r, "mix\tmost");
+    ask(ROOT, &r, "mix\tforgotten");
     CHECK(!strcmp(r.f[1][3], "Not on the card") && strstr(r.f[0][3], kept));
     int fd = open(gone_full, O_CREAT | O_WRONLY, 0644);
     CHECK(fd >= 0 && !close(fd));
     snprintf(c, sizeof c, "save\t%s", gen);
     ask(ROOT, &r, c);
-    CHECK(strstr(r.head[2], "Most Played Mixtape 20") && strstr(r.head[2], "joins Playlists"));
+    CHECK(strstr(r.head[2], "Forgotten Favourites Mixtape 20") &&
+          strstr(r.head[2], "joins Playlists"));
     char *lib = slurp(ROOT "/tmp/q2-mixtape.library", 0),
-         *add = lib ? strstr(lib, "\nadd /mnt/mmc/_explaylist_data/Most Played Mixtape ") : 0;
+         *add =
+             lib ? strstr(lib, "\nadd /mnt/mmc/_explaylist_data/Forgotten Favourites Mixtape ") : 0;
     CHECK(add && strstr(add, ".m3u\n"));
     snprintf(path, sizeof path, ROOT "%.*s", (int)(strstr(add, ".m3u\n") + 4 - add - 5), add + 5);
     CHECK(!access(path, 0));
@@ -866,14 +867,24 @@ static void check_app(void) {
      */
     ask(ROOT, &r, "played");
     CHECK(r.rows == 50 && !strcmp(r.head[2], "pages") && !strcmp(r.head[3], "50") &&
-          !strcmp(r.f[0][2], "Song 100") && !strcmp(r.f[0][3], "Artist 10, 600 plays") &&
+          !strcmp(r.f[0][2], "Song 100") && !strcmp(r.f[0][3], "Artist 10 \xc2\xb7 600 plays") &&
           !strcmp(r.f[0][4], "song 101") && find(&r, "Re-roll") < 0 &&
           find(&r, "Save as Playlist") < 0);
     for (int i = 1; i < r.rows; ++i) {
         CHECK(!strcmp(r.f[i][0], "list") && !strcmp(r.f[i][1], "mix") &&
               !strncmp(r.f[i][4], "song ", 5));
-        CHECK(atoi(strrchr(r.f[i][3], ',') + 1) <= atoi(strrchr(r.f[i - 1][3], ',') + 1));
+        CHECK(atoi(strstr(r.f[i][3], "\xc2\xb7") + 2) <=
+              atoi(strstr(r.f[i - 1][3], "\xc2\xb7") + 2));
     }
+    ask(ROOT, &r, "played\t500"); /* the last window: the 512th, and no cursor after it */
+    CHECK(r.rows == 12 && !r.head[2][0] && !r.head[3][0] && !strcmp(r.f[11][1], "mix"));
+    ask(ROOT, &r, "songs\t49990"); /* From a Song's last window: 50,000 songs */
+    CHECK(r.rows == 10 && !r.head[3][0] && strcmp(r.f[0][0], "search"));
+    CHECK(!rename(ROOT "/mnt/data/ringnav-plays", ROOT "/mnt/data/away-plays"));
+    ask(ROOT, &r, "played"); /* no play counted: said */
+    CHECK(r.rows == 1 && !strcmp(r.f[0][2], "Play some music first") && !r.head[3][0]);
+    CHECK(!rename(ROOT "/mnt/data/away-plays", ROOT "/mnt/data/ringnav-plays"));
+    ask(ROOT, &r, "played");
     snprintf(c, sizeof c, "mix\t%s", r.f[0][4]);
     ask(ROOT, &r, c);
     CHECK(!strncmp(r.f[0][3], "Like Song 100", 13) && find(&r, "Re-roll") >= 0);

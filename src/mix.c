@@ -277,9 +277,9 @@ static int by_artist(const void *a, const void *b) {
 }
 
 /* The scores of a mix from plays and hearts alone, with a draw of chance so each craft differs:
- * Most Played the songs by their counts; Forgotten Favourites the songs played three times or
- * more, or loved (four hearts or five), but not among the last RECENT counted; Never Played the
- * songs with no count kept; Deep Cuts the songs with none by the artists played most.
+ * Forgotten Favourites the songs played three times or more, or loved (four hearts or five), but
+ * not among the last RECENT counted; Never Played the songs with no count kept; Deep Cuts the songs
+ * with none by the artists played most.
  * ponytail: Q2 Pod keeps 512 counts, the fewest-played forgotten first, so "never played" is
  * "no count kept" in a big library. */
 void mx_counts(song_t *v, int n, int kind) {
@@ -298,9 +298,7 @@ void mx_counts(song_t *v, int n, int kind) {
         song_t *s = &v[i];
         float b = 0;
         s->seed = 0;
-        if (kind == MIX_MOST)
-            b = s->plays;
-        else if (kind == MIX_FORGOTTEN)
+        if (kind == MIX_FORGOTTEN)
             b = (s->plays >= 3 || s->hearts >= 4) && (s->recency < 0 || s->recency >= RECENT)
                     ? 1 + (float)log2(1 + s->plays)
                     : 0;
