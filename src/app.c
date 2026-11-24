@@ -30,6 +30,7 @@
 #define REPLY_MAX (64 << 10) /* Q2SPOT/1's limits */
 #define REQ_MAX (8 << 10)
 #define ROWS 50
+#define SONG_ROWS 20 /* a search's songs, after its artists and albums */
 #define FIND_ROWS 24 /* recommendations not on the card, listed after the mix */
 /* No request this long and nothing running: the app ends, so Smart Wi-Fi can let the radio
  * sleep. The next page starts it again. */
@@ -654,13 +655,14 @@ static void page_menu(rep_t *r) {
     else if (scanning)
         snprintf(sub, sizeof sub, "Checking your songs\xe2\x80\xa6");
     row(r, "list", "mix", "Shuffle", "Any songs from your Library", "shuffle");
-    row(r, "list", "mix", "Most Played", "Your most played songs", "most");
+    row(r, "list", "played", "Most Played", "Pick a song to mix from", "");
     row(r, "list", "mix", "Forgotten Favourites", "Loved or played a lot, but not lately",
         "forgotten");
     row(r, "list", "mix", "Never Played", "Songs with no play counted", "never");
     row(r, "list", "mix", "Deep Cuts", "Unplayed songs by the artists you play most", "deep");
     row(r, "list", "albums", "From an Album", "Songs that sound like it", "");
     row(r, "list", "artists", "From an Artist", "Songs that sound like theirs", "");
+    row(r, "list", "songs", "From a Song", "Songs that sound like it", "");
     row(r, "list", "lastfm", "Last.fm", "Its similar artists, from your card", "");
     row(r, "list", "listenbrainz", "ListenBrainz", "Its picks for you, from your card", "");
     row(r, "list", "scan", "Listen to Your Music", sub, "");
@@ -707,27 +709,112 @@ static void page_groups(rep_t *r, int artists, const char *cursor) {
         snprintf(r->cursor, sizeof r->cursor, "%d", i), snprintf(r->msg, sizeof r->msg, "pages");
 }
 
+/* A song's row: its title, its artist (and note) as the subtitle, a press making a mix like it. */
+static void song_row(rep_t *r, void *db, const song_t *s, const char *note) {
+    char path[1024], title[128], artist[128], sub[300], c[24];
+    if (!song_text(db, s->id, path, sizeof path, title, sizeof title, artist, sizeof artist))
+        return;
+    snprintf(sub, sizeof sub, "%s%s%s", artist, artist[0] && note[0] ? ", " : "", note);
+    snprintf(c, sizeof c, "song %u", s->id);
+    row(r, "list", "mix", title, sub, c);
+}
+
+/* From a Song: every song of the Library, a window of ROWS from the cursor (an index into lib.v,
+ * which is in id order), Search first. ponytail: in the Library's order, not by title; Search
+ * finds one by name. */
+static void page_songs(rep_t *r, const char *cursor) {
+    if (!lib_load(0)) {
+        info(r, "No Library yet: run Update Library", "");
+        return;
+    }
+    int off = atoi(cursor), i = off;
+    void *db = db_open();
+    if (!off) row(r, "search", "", "Search", "", "");
+    for (; i < lib.n && r->count < ROWS; ++i) song_row(r, db, &lib.v[i], "");
+    if (db) db_close(db);
+    if (i < lib.n)
+        snprintf(r->cursor, sizeof r->cursor, "%d", i), snprintf(r->msg, sizeof r->msg, "pages");
+}
+
+static int by_plays(const void *a, const void *b) {
+    const song_t *x = &lib.v[*(const int *)a], *y = &lib.v[*(const int *)b];
+    return x->plays != y->plays ? (int)y->plays - (int)x->plays : x->recency - y->recency;
+}
+
+/* Most Played: the songs with a count, the most played first (the newest first among equals),
+ * a window of ROWS from the cursor. Q2 Pod keeps 512 counts. */
+static void page_played(rep_t *r, const char *cursor) {
+    if (!lib_load(1)) {
+        info(r, "No Library yet: run Update Library", "");
+        return;
+    }
+    int off = atoi(cursor), n = 0, *o = malloc((size_t)(lib.n + 1) * sizeof *o);
+    if (!o) return;
+    for (int i = 0; i < lib.n; ++i)
+        if (lib.v[i].plays) o[n++] = i;
+    qsort(o, (size_t)n, sizeof *o, by_plays);
+    if (!n) info(r, "Play some music first", "This list is made from play counts");
+    void *db = db_open();
+    int i = off;
+    for (char note[24]; i < n && r->count < ROWS; ++i)
+        snprintf(note, sizeof note, "%u plays", lib.v[o[i]].plays),
+            song_row(r, db, &lib.v[o[i]], note);
+    if (db) db_close(db);
+    free(o);
+    if (i < n)
+        snprintf(r->cursor, sizeof r->cursor, "%d", i), snprintf(r->msg, sizeof r->msg, "pages");
+}
+
+typedef struct {
+    rep_t *r;
+    const char *text;
+} find_t;
+/* A song whose title has the text, listed while the rows last (db_page's row callback). */
+static int song_found(void *ctx, void *st) {
+    find_t *f = ctx;
+    int at = lib_find((unsigned)col_i(st, 0));
+    const char *title = col_s(st, 1);
+    if (at >= 0 &&
+        strcasestr(title[0] && strcmp(title, "(null)") ? title : col_s(st, 3), f->text)) {
+        char c[24], artist[128];
+        snprintf(c, sizeof c, "song %u", lib.v[at].id);
+        snprintf(artist, sizeof artist, "%s", strcmp(col_s(st, 2), "(null)") ? col_s(st, 2) : "");
+        row(f->r, "list", "mix", title[0] && strcmp(title, "(null)") ? title : col_s(st, 3), artist,
+            c);
+    }
+    return f->r->count >= ROWS;
+}
+
 static void page_search(rep_t *r, const char *text) {
     if (!lib_load(0)) {
         info(r, "No Library yet: run Update Library", "");
         return;
     }
     char c[24];
-    int albums = 0; /* artists leave them half the page */
-    for (int i = 0; i < lib.nalbums && albums < ROWS / 2; ++i)
+    int albums = 0, room = ROWS - SONG_ROWS; /* artists leave albums half of their room */
+    for (int i = 0; i < lib.nalbums && albums < room / 2; ++i)
         albums += strcasestr(lib_str(lib.albums[i].name), text) ||
                   strcasestr(lib_str(lib.albums[i].artist), text);
-    for (int i = 0; i < lib.nartists && r->count < ROWS - albums; ++i)
+    for (int i = 0; i < lib.nartists && r->count < room - albums; ++i)
         if (strcasestr(lib_str(lib.artists[i].name), text))
             snprintf(c, sizeof c, "artist %08x", lib.artists[i].hash),
                 row(r, "list", "mix", lib_str(lib.artists[i].name), "Artist", c);
-    for (int i = 0; i < lib.nalbums && r->count < ROWS; ++i)
+    for (int i = 0; i < lib.nalbums && r->count < room; ++i)
         if (strcasestr(lib_str(lib.albums[i].name), text) ||
             strcasestr(lib_str(lib.albums[i].artist), text))
             snprintf(c, sizeof c, "album %08x", lib.albums[i].hash),
                 row(r, "list", "mix", lib_str(lib.albums[i].name), lib_str(lib.albums[i].artist),
                     c);
-    if (!r->count) info(r, "No album or artist has that name", "");
+    void *db = db_open();
+    unsigned last = 0;
+    find_t f = { r, text };
+    if (db)
+        db_page(db,
+                "select id,name,songer,filename from songtable where id>? and " MUSIC_SQL
+                " order by id limit 500",
+                &last, song_found, &f),
+            db_close(db);
+    if (!r->count) info(r, "Nothing has that name", "");
 }
 
 static void page_scan(rep_t *r) {
@@ -841,6 +928,10 @@ static void handle(char **a, int n, rep_t *r) {
         page_mix(r, x);
     else if (!strcmp(op, "albums") || !strcmp(op, "artists"))
         page_groups(r, op[1] == 'r', x);
+    else if (!strcmp(op, "songs"))
+        page_songs(r, x);
+    else if (!strcmp(op, "played"))
+        page_played(r, x);
     else if (!strcmp(op, "search"))
         page_search(r, x);
     else if (!strcmp(op, "scan"))

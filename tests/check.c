@@ -709,8 +709,11 @@ static void check_app(void) {
     char path[512], c[64];
     pid_t pid = app_start(ROOT, "playlist progress pages library goto field more fav playkept\n");
     ask(ROOT, &r, "menu");
-    CHECK(!strcmp(r.head[1], "ok") && r.rows == 11 && !strcmp(r.f[0][1], "mix") &&
-          !strcmp(r.f[0][4], "shuffle") && !strcmp(r.f[10][3], "45 minutes"));
+    CHECK(!strcmp(r.head[1], "ok") && r.rows == 12 && !strcmp(r.f[0][1], "mix") &&
+          !strcmp(r.f[0][4], "shuffle") && !strcmp(r.f[11][3], "45 minutes"));
+    /* Most Played is a list of songs, not a mix; From a Song opens the song list */
+    CHECK(!strcmp(r.f[1][2], "Most Played") && !strcmp(r.f[1][1], "played") && !r.f[1][4][0] &&
+          !strcmp(r.f[7][2], "From a Song") && !strcmp(r.f[7][1], "songs"));
     ask(ROOT, &r, "nothing");
     CHECK(!strcmp(r.head[1], "unsupported"));
 
@@ -846,8 +849,34 @@ static void check_app(void) {
     snprintf(c, sizeof c, "mix\t%s", r.f[1][4]);
     ask(ROOT, &r, c);
     CHECK(!strncmp(r.f[0][3], "From Album 1499", 15));
-    ask(ROOT, &r, "search\tArtist 1"); /* 611 artists match, and their albums: half the page */
-    CHECK(r.rows == 50 && !strcmp(r.f[24][3], "Artist") && strcmp(r.f[25][3], "Artist"));
+    ask(ROOT, &r, "search\tArtist 1"); /* 611 artists match, and their albums: 30 rows, half each */
+    CHECK(r.rows == 30 && !strcmp(r.f[14][3], "Artist") && strcmp(r.f[15][3], "Artist"));
+    ask(ROOT, &r, "search\tsong 77"); /* songs by title: each a row that seeds a mix */
+    CHECK(r.rows == 50 && !strcmp(r.f[0][2], "Song 77") && !strncmp(r.f[0][4], "song ", 5));
+    snprintf(c, sizeof c, "mix\t%s", r.f[0][4]);
+    ask(ROOT, &r, c);
+    CHECK(!strncmp(r.f[0][3], "Like Song 77", 12) && !strcmp(r.f[0][2], "Play Mixtape"));
+    ask(ROOT, &r, "songs"); /* From a Song: Search, then the Library's songs, a window at a time */
+    CHECK(!strcmp(r.f[0][0], "search") && r.rows == 50 && !strcmp(r.head[2], "pages") &&
+          !strcmp(r.head[3], "49") && !strncmp(r.f[1][4], "song ", 5));
+    snprintf(c, sizeof c, "mix\t%s", r.f[1][4]);
+    ask(ROOT, &r, c);
+    CHECK(!strncmp(r.f[0][3], "Like Song ", 10) && !strcmp(r.f[0][2], "Play Mixtape"));
+    /* Most Played: the counted songs, the most first; rows, not a mix (no strike, Re-roll or Save)
+     */
+    ask(ROOT, &r, "played");
+    CHECK(r.rows == 50 && !strcmp(r.head[2], "pages") && !strcmp(r.head[3], "50") &&
+          !strcmp(r.f[0][2], "Song 100") && !strcmp(r.f[0][3], "Artist 10, 600 plays") &&
+          !strcmp(r.f[0][4], "song 101") && find(&r, "Re-roll") < 0 &&
+          find(&r, "Save as Playlist") < 0);
+    for (int i = 1; i < r.rows; ++i) {
+        CHECK(!strcmp(r.f[i][0], "list") && !strcmp(r.f[i][1], "mix") &&
+              !strncmp(r.f[i][4], "song ", 5));
+        CHECK(atoi(strrchr(r.f[i][3], ',') + 1) <= atoi(strrchr(r.f[i - 1][3], ',') + 1));
+    }
+    snprintf(c, sizeof c, "mix\t%s", r.f[0][4]);
+    ask(ROOT, &r, c);
+    CHECK(!strncmp(r.f[0][3], "Like Song 100", 13) && find(&r, "Re-roll") >= 0);
     ask(ROOT, &r, "search\tno such thing");
     CHECK(r.rows == 1 && !strcmp(r.f[0][0], "info"));
 

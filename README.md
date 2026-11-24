@@ -11,21 +11,22 @@ Each mix is as long as **Mix Length** says, from 5 minutes to an hour (45 minute
 ```
 Mixtape
 ├── Shuffle                 any songs from your Library
-├── Most Played             your most played songs
+├── Most Played             your most played songs, to pick one from
 ├── Forgotten Favourites    loved or played a lot, but not lately
 ├── Never Played            songs with no play counted
 ├── Deep Cuts               unplayed songs by the artists you play most
 ├── From an Album           Search, then every album: songs that sound like it
 ├── From an Artist          Search, then every artist: songs that sound like theirs
+├── From a Song             Search, then every song: songs that sound like it
 ├── Last.fm                 Username:, then Similar Artists
 ├── ListenBrainz            Username:, then Recommendations
 ├── Listen to Your Music    how many songs are heard; Listen Now
 └── Mix Length              5, 10, 15, 20, 30, 45 or 60 minutes
 ```
 
-**Shuffle** draws any songs at random, all but the ones you've given one heart. It and the next four need no listening: those four come from Q2 Pod's play counts and your hearts (rated songs and albums count for more, a one-heart song for much less). Q2 Pod keeps counts for 512 songs, so in a big library **Never Played** means none kept. Once your music is heard (below), those four play in sound order, each song leading into the next.
+**Shuffle** draws any songs at random, all but the ones you've given one heart. **Most Played** is a list, not a mix: your most played songs, the most first (Q2 Pod keeps 512 counts), and **Centre** on one makes a mix from that song, as **From a Song** does. **Forgotten Favourites**, **Never Played** and **Deep Cuts** need no listening, any more than Shuffle: they come from Q2 Pod's play counts and your hearts (rated songs and albums count for more, a one-heart song for much less). Q2 Pod keeps counts for 512 songs, so in a big library **Never Played** means none kept. Once your music is heard (below), those three play in sound order, each song leading into the next.
 
-**From an Album** and **From an Artist** start with one of the album's (or artist's) best-loved songs, put two more of its own a third and two thirds of the way in, and fill the rest with songs that share its tags (the genres most of its songs have, the same artist, era and length), the nearest in sound first. Your hearts and plays only break near ties there, so your favourites don't crowd out the songs that sound most alike; a one-heart song still counts for much less. They need your music heard first (below); until then only songs the tags vouch for are used.
+**From a Song** lists the Library's songs 50 at a time, with **Search** (by title) first; a song makes a mix like it, as **More Like This** does. **From an Album** and **From an Artist** start with one of the album's (or artist's) best-loved songs, put two more of its own a third and two thirds of the way in, and fill the rest with songs that share its tags (the genres most of its songs have, the same artist, era and length), the nearest in sound first. Your hearts and plays only break near ties there, so your favourites don't crowd out the songs that sound most alike; a one-heart song still counts for much less. They need your music heard first (below); until then only songs the tags vouch for are used.
 
 While a Mixtape plays, Now Playing's **⋯** has **More Like This**: a mix like the song playing, or like its album or artist.
 
@@ -44,7 +45,7 @@ Last.fm also needs an API key. If this build has none, Mixtape uses the one unde
 
 ## Listen to Your Music
 
-The sound mixes need each song heard once: 30 seconds from its middle, turned into a short profile of its timbre. **Listen to Your Music → Listen Now** does it on the Q2, in the background and at the lowest priority so playback comes first, and keeps the Q2 awake while it works. A big library takes hours: keep the Q2 charging. **Stop Listening** keeps what has been heard. Next time only the songs not heard yet, and songs that changed, are heard. What's heard is used by **From an Album**, **From an Artist** and **More Like This**, and puts the play-count mixes in sound order.
+The sound mixes need each song heard once: 30 seconds from its middle, turned into a short profile of its timbre. **Listen to Your Music → Listen Now** does it on the Q2, in the background and at the lowest priority so playback comes first, and keeps the Q2 awake while it works. A big library takes hours: keep the Q2 charging. **Stop Listening** keeps what has been heard. Next time only the songs not heard yet, and songs that changed, are heard. What's heard is used by **From an Album**, **From an Artist**, **From a Song** and **More Like This**, and puts the play-count mixes in sound order.
 
 ### Faster, on a computer
 
