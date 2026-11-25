@@ -834,7 +834,7 @@ static void page_recent(rep_t *r) {
     int n = recent_read(m);
     if (!n) info(r, "No mixes made yet", "");
     for (int i = 0; i < n; ++i) {
-        char title[160], sub[64], c[16], day[16];
+        char title[160], sub[64], c[24], day[16];
         time_t when = (time_t)m[i].when;
         tape_name(title, sizeof title, m[i].key, m[i].name);
         strftime(day, sizeof day, "%Y-%m-%d", localtime(&when));
