@@ -721,11 +721,10 @@ static void check_app(void) {
     /* Today's Mix leads: the fixture's plays and heard songs make it, From an Artist's mix of one
      * of the seven artists played most (10 to 16), named for the artist */
     int today = 0;
-    CHECK(!strcmp(r.head[1], "ok") && r.rows == 13 && !strcmp(r.f[0][1], "mix") &&
+    CHECK(!strcmp(r.head[1], "ok") && r.rows == 12 && !strcmp(r.f[0][1], "mix") &&
           !strncmp(r.f[0][2], "Your mix for ", 13) && !strncmp(r.f[0][4], "artist ", 7) &&
           sscanf(r.f[0][3], "Like Artist %d", &today) == 1 && today >= 10 && today <= 16);
-    CHECK(!strcmp(r.f[1][1], "mix") && !strcmp(r.f[1][4], "shuffle") &&
-          !strcmp(r.f[12][3], "45 minutes"));
+    CHECK(!strcmp(r.f[1][1], "mix") && !strcmp(r.f[1][4], "shuffle"));
     /* Most Played is a list of songs, not a mix; From a Song opens the song list */
     CHECK(!strcmp(r.f[2][2], "Most Played") && !strcmp(r.f[2][1], "played") && !r.f[2][4][0] &&
           !strcmp(r.f[6][2], "From a Song") && !strcmp(r.f[6][1], "songs") &&
@@ -735,13 +734,17 @@ static void check_app(void) {
     CHECK(!strcmp(r.f[9][1], "recent") && !strcmp(r.f[9][2], "Recent Mixes") &&
           !strcmp(r.f[9][3], "Your last five mixes") && !strcmp(r.f[10][1], "online") &&
           !strcmp(r.f[10][2], "Online") && !strcmp(r.f[10][3], "Last.fm and ListenBrainz") &&
-          !strcmp(r.f[11][2], "Listen to Your Music") && !strcmp(r.f[12][2], "Mix Length"));
+          !strcmp(r.f[11][1], "options") && !strcmp(r.f[11][2], "Options"));
     /* Today's Mix is a mix like any other: its page named for the artist */
     char want[64];
     snprintf(want, sizeof want, "Side A \xc2\xb7 Artist %d and friends", today);
     snprintf(c, sizeof c, "mix\t%s", r.f[0][4]);
     ask(ROOT, &r, c);
     CHECK(!strcmp(r.f[0][2], "Play Mixtape") && !strncmp(r.f[0][3], want, strlen(want)));
+    /* Options: Scan Your Music, then Mix Length */
+    ask(ROOT, &r, "options");
+    CHECK(r.rows == 2 && !strcmp(r.f[0][1], "scan") && !strcmp(r.f[0][2], "Scan Your Music") &&
+          !strcmp(r.f[1][1], "lengths") && !strcmp(r.f[1][3], "45 minutes"));
     ask(ROOT, &r, "online");
     CHECK(r.rows == 2 && !strcmp(r.f[0][1], "lastfm") && !strcmp(r.f[0][2], "Last.fm") &&
           !strcmp(r.f[0][3], "Its similar artists, from your card") &&
@@ -922,14 +925,14 @@ static void check_app(void) {
     ask(ROOT, &r, "played"); /* no play counted: said */
     CHECK(r.rows == 1 && !strcmp(r.f[0][2], "Play some music first") && !r.head[3][0]);
     ask(ROOT, &r, "menu"); /* and no Today's Mix */
-    CHECK(r.rows == 12 && !strcmp(r.f[0][2], "Shuffle"));
+    CHECK(r.rows == 11 && !strcmp(r.f[0][2], "Shuffle"));
     CHECK(!rename(ROOT "/mnt/data/away-plays", ROOT "/mnt/data/ringnav-plays"));
     ask(ROOT, &r, "played");
     /* nothing heard (the profiles away): no Today's Mix either */
     CHECK(!rename(ROOT PROF_FILE, ROOT "/mnt/data/away-profiles"));
     ask(ROOT, &r, "played");
     ask(ROOT, &r, "menu");
-    CHECK(r.rows == 12 && !strcmp(r.f[0][2], "Shuffle"));
+    CHECK(r.rows == 11 && !strcmp(r.f[0][2], "Shuffle"));
     CHECK(!rename(ROOT "/mnt/data/away-profiles", ROOT PROF_FILE));
     ask(ROOT, &r, "played");
     snprintf(c, sizeof c, "mix\t%s", r.f[0][4]);

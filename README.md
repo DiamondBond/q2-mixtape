@@ -6,7 +6,7 @@ A card app for the Shanling Q2. Install it from Q2 Pod's App Store, or unzip `mi
 
 ## The mixes
 
-Each mix is as long as **Mix Length** says, from 5 minutes to an hour (45 minutes until you choose; at most 30 songs), and ends as near that length as its songs allow. It is drawn when you open it and kept until you open another, press **Re-roll** or leave Mixtape for ten minutes, with some variety: never the same artist twice in a row, at most two songs by one artist, and at most one from any album but the one it's made from. Songs under a minute are left out, and so are songs over half an hour but the album's or artist's own (a DJ set would be the whole mix), and the tracks of a CUE image: a playlist can only name the whole file.
+Each mix is as long as **Options → Mix Length** says, from 5 minutes to an hour (45 minutes until you choose; at most 30 songs), and ends as near that length as its songs allow. It is drawn when you open it and kept until you open another, press **Re-roll** or leave Mixtape for ten minutes, with some variety: never the same artist twice in a row, at most two songs by one artist, and at most one from any album but the one it's made from. Songs under a minute are left out, and so are songs over half an hour but the album's or artist's own (a DJ set would be the whole mix), and the tracks of a CUE image: a playlist can only name the whole file.
 
 ```
 Mixtape
@@ -23,8 +23,9 @@ Mixtape
 ├── Online                  Last.fm and ListenBrainz
 │   ├── Last.fm             Username:, then Similar Artists
 │   └── ListenBrainz        Username:, then Recommendations
-├── Listen to Your Music    how many songs are heard; Listen Now
-└── Mix Length              5, 10, 15, 20, 30, 45 or 60 minutes
+└── Options
+    ├── Scan Your Music     how many songs are heard; Listen Now
+    └── Mix Length          5, 10, 15, 20, 30, 45 or 60 minutes
 ```
 
 **Shuffle** draws any songs at random, all but the ones you've given one heart. **Most Played** is a list, not a mix: your most played songs, the most first (Q2 Pod keeps 512 counts), and **Centre** on one makes a mix from that song, as **From a Song** does. **Forgotten Favourites**, **Never Played** and **Deep Cuts** need no listening, any more than Shuffle: they come from Q2 Pod's play counts and your hearts (rated songs and albums count for more, a one-heart song for much less). Q2 Pod keeps counts for 512 songs, so in a big library **Never Played** means none kept. Once your music is heard (below), those three play in sound order, each song leading into the next.
@@ -51,9 +52,9 @@ Last.fm also needs an API key. If this build has none, Mixtape uses the one unde
 
 On Q2 Pod versions that offer covers to card apps, the mix page shows each song's cover beside its row.
 
-## Listen to Your Music
+## Scan Your Music
 
-The sound mixes need each song heard once: 30 seconds from its middle, turned into a short profile of its timbre. **Listen to Your Music → Listen Now** does it on the Q2, in the background and at the lowest priority so playback comes first, and keeps the Q2 awake while it works. A big library takes hours: keep the Q2 charging. **Stop Listening** keeps what has been heard. Next time only the songs not heard yet, and songs that changed, are heard. What's heard is used by **From a Song**, **From an Album**, **From an Artist**, **Your mix for** and **More Like This**, and puts the play-count mixes in sound order.
+The sound mixes need each song heard once: 30 seconds from its middle, turned into a short profile of its timbre. **Options → Scan Your Music → Listen Now** does it on the Q2, in the background and at the lowest priority so playback comes first, and keeps the Q2 awake while it works. A big library takes hours: keep the Q2 charging. **Stop Listening** keeps what has been heard. Next time only the songs not heard yet, and songs that changed, are heard. What's heard is used by **From a Song**, **From an Album**, **From an Artist**, **Your mix for** and **More Like This**, and puts the play-count mixes in sound order.
 
 ### Faster, on a computer
 

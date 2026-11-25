@@ -866,13 +866,6 @@ static void act_save(rep_t *r, const char *ctx) {
 /* ---- Pages -------------------------------------------------------------------------------- */
 
 static void page_menu(rep_t *r) {
-    scan_t s;
-    char a[16], b[16], sub[96] = "How each song sounds, for the sound mixes", len[24];
-    int scanning = scanner > 0 && scan_read(&s);
-    if (scanning && !strcmp(s.phase, "listen"))
-        snprintf(sub, sizeof sub, "Listening: %s of %s", commas(s.done, a), commas(s.total, b));
-    else if (scanning)
-        snprintf(sub, sizeof sub, "Checking your songs\xe2\x80\xa6");
     /* Today's Mix: the day (its number, so it changes at midnight) picks one of the top artists by
      * plays, and the mix is From an Artist's. Plays as last read, as the list pages have them. */
     time_t now = time(0);
@@ -898,7 +891,19 @@ static void page_menu(rep_t *r) {
     row(r, "list", "artists", "From an Artist", "Their sound, and those near it", "");
     row(r, "list", "recent", "Recent Mixes", "Your last five mixes", "");
     row(r, "list", "online", "Online", "Last.fm and ListenBrainz", "");
-    row(r, "list", "scan", "Listen to Your Music", sub, "");
+    row(r, "list", "options", "Options", "Scan Your Music, Mix Length", "");
+}
+
+/* Options: Scan Your Music, with the scan's progress, and Mix Length. */
+static void page_options(rep_t *r) {
+    scan_t s;
+    char a[16], b[16], sub[96] = "How each song sounds, for the sound mixes", len[24];
+    int scanning = scanner > 0 && scan_read(&s);
+    if (scanning && !strcmp(s.phase, "listen"))
+        snprintf(sub, sizeof sub, "Listening: %s of %s", commas(s.done, a), commas(s.total, b));
+    else if (scanning)
+        snprintf(sub, sizeof sub, "Checking your songs\xe2\x80\xa6");
+    row(r, "list", "scan", "Scan Your Music", sub, "");
     snprintf(len, sizeof len, "%d minutes", length_min);
     row(r, "list", "lengths", "Mix Length", len, "");
 }
@@ -1194,6 +1199,8 @@ static void handle(char **a, int n, rep_t *r) {
         act_length(r, x);
     else if (!strcmp(op, "online"))
         page_online(r);
+    else if (!strcmp(op, "options"))
+        page_options(r);
     else if (!strcmp(op, "recent"))
         page_recent(r);
     else if (!strcmp(op, "lastfm") || !strcmp(op, "listenbrainz"))
