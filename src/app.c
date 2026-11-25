@@ -537,11 +537,12 @@ static void craft(const char *arg, int again) {
     if (mx.len && !again) recent_add(); /* made: a re-roll is not */
 }
 
-/* The artists of the songs kept (not struck, on the card), most songs first, as an info row: three
- * named, the list cut to fit, then " and N more". */
+/* The artists of the songs kept (not struck, on the card), most songs first, as an info row
+ * "Artists": up to three named on its small line, as many as fit, then " and N more". */
+#define ARTISTS_ROOM 40 /* bytes a row's small line shows, as Play's subtitle does */
 static void artists_row(rep_t *r) {
     const char *name[MX_MAX];
-    int songs[MX_MAX], na = 0, k = 0;
+    int songs[MX_MAX], na = 0, k = 0, named = 0;
     char list[400] = "", t[240];
     for (int i = 0; i < mx.len; ++i) {
         int j = 0;
@@ -550,21 +551,23 @@ static void artists_row(rep_t *r) {
         if (j == na) name[na] = mx.row[i].artist, songs[na++] = 0;
         ++songs[j];
     }
+    if (!na) return;
     for (int pick = 0; pick < na && pick < 3; ++pick) {
-        int best = -1;
+        int best = -1, n = k;
         for (int j = 0; j < na; ++j)
             if (songs[j] >= 0 && (best < 0 || songs[j] > songs[best])) best = j;
         songs[best] = -1;
-        k += snprintf(list + k, sizeof list - (size_t)k, "%s%s",
+        n += snprintf(list + k, sizeof list - (size_t)k, "%s%s",
                       k ? (pick == na - 1 ? " and " : ", ") : "", name[best]);
+        if (k && n + (pick < na - 1 ? 12 : 0) > ARTISTS_ROOM) break; /* the last one named stays */
+        k = n, named = pick + 1;
     }
-    if (!na) return;
-    int m = cut(list, 48);
-    if (na > 3)
-        snprintf(t, sizeof t, "%.*s and %d more", m, list, na - 3);
+    list[k] = 0;
+    if (named < na)
+        snprintf(t, sizeof t, "%.*s and %d more", cut(list, ARTISTS_ROOM), list, na - named);
     else
-        snprintf(t, sizeof t, "%.*s", m, list);
-    info(r, t, "");
+        snprintf(t, sizeof t, "%.*s", cut(list, ARTISTS_ROOM), list);
+    info(r, "Artists", t); /* the list on the small line: in the title's font it ran off the row */
 }
 
 /* ---- Covers ------------------------------------------------------------------------------- */

@@ -766,7 +766,8 @@ static void check_app(void) {
     CHECK(find(&r, "Re-roll") == r.rows - 2 && find(&r, "Save as Playlist") == r.rows - 1);
     /* the artists line, then the songs */
     CHECK(strstr(r.f[0][3], "Side A \xc2\xb7 Forgotten Favourites \xc2\xb7 ") &&
-          !strcmp(r.f[1][0], "info") && r.f[1][2][0] && !r.f[1][3][0]);
+          !strcmp(r.f[1][0], "info") && !strcmp(r.f[1][2], "Artists") && r.f[1][3][0] &&
+          strlen(r.f[1][3]) <= 40 + 12);
     char gen[16], first[128], ctx[32];
     snprintf(gen, sizeof gen, "%s", r.f[0][4]);
     snprintf(first, sizeof first, "%s", r.f[2][2]);
@@ -991,8 +992,9 @@ static void check_app(void) {
           !strcmp(r.head[2], "refresh"));
     for (int i = 0; i < 100 && find(&r, "Play Mixtape") < 0; ++i)
         usleep(50000), ask(ROOT, &r, "mix\tlistenbrainz");
-    CHECK(r.rows == 6 && !strcmp(r.f[1][2], "Artist 77") && !strcmp(r.f[2][2], "Song 778") &&
-          !strcmp(r.f[5][2], "Nowhere") && !strcmp(r.f[5][3], "Nobody \xc2\xb7 To find"));
+    CHECK(r.rows == 6 && !strcmp(r.f[1][2], "Artists") && !strcmp(r.f[1][3], "Artist 77") &&
+          !strcmp(r.f[2][2], "Song 778") && !strcmp(r.f[5][2], "Nowhere") &&
+          !strcmp(r.f[5][3], "Nobody \xc2\xb7 To find"));
     ask(ROOT, &r, "mix\tlastfm");
     for (int i = 0; i < 100 && r.rows == 1; ++i) usleep(50000), ask(ROOT, &r, "mix\tlastfm");
     CHECK(find(&r, "Play Mixtape") == 0 && r.rows >= 6 + 1 &&
