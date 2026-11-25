@@ -1,8 +1,10 @@
 /* Listening, the app's child process (q2-mixtape scan, nice 19): every Library song whose file
  * has no profile yet, or changed size since, is heard through the Q2's ffmpeg, and its profile
  * appended to the card's file at once, so nothing is lost when it stops. Its progress goes to
- * SCAN_FILE for the page; it ends on a TERM, killing its ffmpeg. */
+ * SCAN_FILE for the page; it ends on a TERM, killing its ffmpeg. The covers (covers_main, at the
+ * end) are the other child, made the same way. */
 #include "mixtape.h"
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
@@ -10,6 +12,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/prctl.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
@@ -285,5 +288,90 @@ int scan_main(int songs) {
     if (fd >= 0) close(fd);
     if (code == END_OK) compact(); /* not on a TERM: USB storage gives the app 3 s */
     say("end", heard, c.n, code);
+    return 0;
+}
+
+/* The covers, the app's other child (q2-mixtape covers, nice 19): COVERS_FILE's "key album path"
+ * lines, in the mix page's order. An album (its hash) gets one cover, made once from its folder's
+ * cover.jpg, folder.jpg or front.jpg (any case), else from its first song's embedded picture, by
+ * ffmpeg at 128 px; each row's <key>.jpg is a link to that one. */
+#define COVER_PX "scale=128:128:force_original_aspect_ratio=decrease"
+static const char *const COVER_NAMES[] = { "cover.jpg", "folder.jpg", "front.jpg" };
+typedef struct {
+    unsigned album, key;
+    int ok; /* <key>.jpg is the album's cover */
+} album_t;
+
+/* The folder's cover into out (a card path): the first of COVER_NAMES it has, in any case. 0 for
+ * none. */
+static int folder_cover(const char *dir, char *out, size_t size) {
+    DIR *d = opendir(R(dir));
+    struct dirent *e;
+    int best = 3;
+    if (!d) return 0;
+    while ((e = readdir(d)))
+        for (int k = 0; k < best; ++k)
+            if (!strcasecmp(e->d_name, COVER_NAMES[k])) {
+                best = k;
+                snprintf(out, size, "%s/%s", dir, e->d_name);
+            }
+    closedir(d);
+    return best < 3;
+}
+
+/* ffmpeg's cover of src into out (both as the card has them, with R's root): 1 when out is a file
+ * now, 0 when it isn't, -2 when there is no ffmpeg. A file ffmpeg left empty is no cover. */
+static int cover_make(const char *src, const char *out) {
+    char err[512],
+        *args[] = { "ffmpeg", "-v",   "error", "-i", (char *)src, "-an", "-frames:v", "1", "-vf",
+                    COVER_PX, "-q:v", "5",     "-y", (char *)out, 0 };
+    int n = run(args, 0, err, sizeof err), made = 0;
+    struct stat s;
+    if (n == -2) return -2;
+    if (n >= 0 && !stat(out, &s) && s.st_size > 0) made = 1;
+    return made;
+}
+
+int covers_main(void) {
+    struct sigaction sa = { 0 };
+    sa.sa_handler = on_term;
+    sigaction(SIGTERM, &sa, 0);
+    sigaction(SIGINT, &sa, 0);
+    prctl(PR_SET_PDEATHSIG, SIGTERM); /* the app gone, so is this */
+    setpriority(PRIO_PROCESS, 0, 19);
+    static album_t al[MX_MAX + 1];
+    FILE *f = fopen(R(COVERS_FILE), "rb");
+    int na = 0;
+    char line[1100];
+    while (f && !quit && fgets(line, sizeof line, f)) {
+        char path[1024], dir[1024], src[1300], a[PATH_ROOM], b[PATH_ROOM], *slash;
+        unsigned key, album;
+        int j = 0;
+        if (sscanf(line, "%8x %8x %1023[^\n]", &key, &album, path) != 3) continue;
+        while (j < na && al[j].album != album) ++j;
+        if (j < na) { /* an album's second row: linked to its cover, when it has one */
+            if (al[j].ok) {
+                snprintf(a, sizeof a, "%s/%08x.jpg", R(ART_DIR), al[j].key);
+                snprintf(b, sizeof b, "%s/%08x.jpg", R(ART_DIR), key);
+                link(a, b);
+            }
+            continue;
+        }
+        if (na == MX_MAX + 1 || !(slash = strrchr(path, '/'))) continue;
+        album_t *x = &al[na++];
+        *x = (album_t){ album, key, 0 };
+        snprintf(dir, sizeof dir, "%.*s", (int)(slash - path), path);
+        if (!folder_cover(dir, src, sizeof src)) snprintf(src, sizeof src, "%s", path);
+        /* written under a name the firmware never reads, then renamed to the row's key */
+        snprintf(a, sizeof a, "%s/%08x.tmp.jpg", R(ART_DIR), key);
+        snprintf(b, sizeof b, "%s/%08x.jpg", R(ART_DIR), key);
+        int made = cover_make(R(src), a);
+        if (made < 0) break; /* no ffmpeg: none will be made */
+        if (made && !rename(a, b))
+            x->ok = 1;
+        else
+            unlink(a);
+    }
+    if (f) fclose(f);
     return 0;
 }

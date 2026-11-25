@@ -49,6 +49,8 @@ Last.fm also needs an API key. If this build has none, Mixtape uses the one unde
 | Re-roll | New songs for the struck ones; with none struck, new songs for all but the album's or artist's own |
 | Save as Playlist | Adds it to Library → Playlists as "*name* Mixtape *date*", once nothing is playing and you've left the Library |
 
+On Q2 Pod versions that offer covers to card apps, the mix page shows each song's cover beside its row.
+
 ## Listen to Your Music
 
 The sound mixes need each song heard once: 30 seconds from its middle, turned into a short profile of its timbre. **Listen to Your Music → Listen Now** does it on the Q2, in the background and at the lowest priority so playback comes first, and keeps the Q2 awake while it works. A big library takes hours: keep the Q2 charging. **Stop Listening** keeps what has been heard. Next time only the songs not heard yet, and songs that changed, are heard. What's heard is used by **From a Song**, **From an Album**, **From an Artist**, **Your mix for** and **More Like This**, and puts the play-count mixes in sound order.

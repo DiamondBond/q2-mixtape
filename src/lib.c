@@ -66,7 +66,8 @@ static long long file_stamp(const char *path) {
 
 /* ---- Keys --------------------------------------------------------------------------------- */
 
-static unsigned bytes32(unsigned h, const void *s, unsigned n) {
+/* n bytes of s from h, FNV-1a 32: plain, with no step more (the covers' keys). */
+unsigned bytes32(unsigned h, const void *s, unsigned n) {
     for (unsigned i = 0; i < n; ++i) h = (h ^ ((const unsigned char *)s)[i]) * 16777619u;
     return h;
 }

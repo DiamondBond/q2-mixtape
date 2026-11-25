@@ -105,6 +105,8 @@ const char *R(const char *path);
 #define DB_FILE "/mnt/data/database.db"
 #define DB_PAGE 500 /* rows a statement: db_page's queries say "limit 500" */
 #define SCAN_FILE "/tmp/q2-mixtape.scan"
+#define COVERS_FILE "/tmp/q2-mixtape.covers" /* the covers' list: "key album path" a line */
+#define ART_DIR "/tmp/q2-mixtape.art"        /* the covers the firmware shows: <key>.jpg */
 /* The scan's codes, the last line of SCAN_FILE: "end <heard> <to hear> <code>". */
 enum { END_OK, END_CARD, END_FFMPEG, END_LIBRARY, END_TERM, END_NEWER };
 /* The Library's music, as Q2 Pod's MUSIC_WHERE: no podcasts, audiobooks or .m4b books. And no
@@ -136,6 +138,7 @@ const char *lib_str(unsigned off);
 int song_text(void *db, unsigned id, char *path, unsigned np, char *title, unsigned nt,
               char *artist, unsigned na);
 int put_file(const char *path, const void *data, size_t n);
+unsigned bytes32(unsigned h, const void *s, unsigned n);
 void dur_open(void);
 void dur_close(void);
 int dur_sec(const char *path);
@@ -152,6 +155,7 @@ int mx_reroll(song_t *v, int n, int *list, int len, unsigned char *struck, int t
 
 /* scan.c */
 int scan_main(int songs);
+int covers_main(void);
 int analyse(const char *path, int len, prof_t *p, short *pcm);
 
 /* net.c */

@@ -1,9 +1,10 @@
 /* Mixtape's host checks (make check, under ASan and UBSan): the JSON walker, the name matching,
  * the features, a synthetic 50,000-song library through every mix and the variety rules, and the
- * app itself over its socket, listening included. With arguments, it is the parity check's C side
- * (tests/parity.py): "analyse FILE", "features RAW", "key PATH" and
+ * app itself over its socket, its covers and listening included. With arguments, it is the
+ * parity check's C side (tests/parity.py): "analyse FILE", "features RAW", "key PATH" and
  * "lookup CARD RELPATH". */
 #include "mixtape.h"
+#include <dirent.h>
 #include <fcntl.h>
 #include <math.h>
 #include <signal.h>
@@ -29,6 +30,7 @@ int sqlite3_close(sqlite3 *);
 
 #define ROOT "build/check-root"
 #define SMALL "build/check-small"
+#define COVER_ROOT "build/check-covers"
 #define SONGS 50000
 #define CHECK(c) ((c) ? (void)0 : (fprintf(stderr, "%s:%d: %s\n", __FILE__, __LINE__, #c), abort()))
 
@@ -1040,8 +1042,128 @@ static void check_app(void) {
     CHECK(strstr(r.head[2], "Saved: Import Playlists adds"));
     ask(ROOT, &r, "lastfm");
     CHECK(!strcmp(r.f[0][0], "info"));
+    CHECK(access(ROOT ART_DIR, 0) && access(ROOT COVERS_FILE, 0)); /* no "art": no covers */
     app_end(pid);
     CHECK(access(ROOT "/tmp/q2-mixtape.play", 0)); /* stopped: never played again as new */
+    free(r.buf);
+}
+
+/* ---- Covers ------------------------------------------------------------------------------- */
+
+/* A row's key as the firmware makes it: plain FNV-1a 32 of "uri", a tab and "context". */
+static unsigned row_key(const char *uri, const char *ctx) {
+    unsigned h = bytes32(2166136261u, uri, (unsigned)strlen(uri));
+    return bytes32(bytes32(h, "\t", 1), ctx, (unsigned)strlen(ctx));
+}
+static int files_in(const char *dir) {
+    DIR *d = opendir(dir);
+    int n = 0;
+    for (struct dirent *e; d && (e = readdir(d));) n += e->d_name[0] != '.';
+    if (d) closedir(d);
+    return n;
+}
+/* Whether a row's cover file is in the art directory; its path into path. */
+static int cover_file(const char *uri, const char *ctx, char *path, size_t size) {
+    snprintf(path, size, COVER_ROOT ART_DIR "/%08x.jpg", row_key(uri, ctx));
+    return !access(path, 0);
+}
+/* The mix page's cover rows (Play Mixtape and the songs: no others have one) into *have, the
+ * number of them with a file; their number. */
+static int covers_on(const reply_t *r, int *have) {
+    int want = 0;
+    *have = 0;
+    for (int i = 0; i < r->rows; ++i) {
+        char path[256];
+        if (strcmp(r->f[i][1], "play") && strcmp(r->f[i][1], "strike")) continue;
+        ++want;
+        *have += cover_file(r->f[i][1], r->f[i][4], path, sizeof path);
+    }
+    return want;
+}
+/* The mix page asked (as its refresh does) until every cover row has its file, or 20 s. */
+static int covers_wait(reply_t *r, int *have) {
+    int want = 0;
+    double t = now_s();
+    do {
+        ask(COVER_ROOT, r, "mix\tshuffle");
+        want = covers_on(r, have);
+        if (*have == want) break;
+        usleep(100000);
+    } while (now_s() - t < 20);
+    return want;
+}
+/* A JPEG's frame header says it is at most 128 px either way. */
+static int jpeg_small(const char *path) {
+    size_t n = 0;
+    unsigned char *b = (unsigned char *)slurp(path, &n);
+    int ok = 0;
+    for (size_t i = 0; b && !ok && i + 9 < n; ++i)
+        if (b[i] == 0xff && (b[i + 1] == 0xc0 || b[i + 1] == 0xc2)) {
+            int h = (b[i + 5] << 8) | b[i + 6], w = (b[i + 7] << 8) | b[i + 8];
+            ok = w > 0 && h > 0 && w <= 128 && h <= 128;
+        }
+    free(b);
+    return ok;
+}
+
+/* Covers, with the "art" word: a cover per album for the Play row and each song row, under the
+ * keys the firmware reads, and nothing else in the art directory. Each album's folder has a cover
+ * (the names in any case, from a 320 by 240 picture, so scaled down); a re-roll's covers replace
+ * the last mix's; the directory goes at quit. */
+static void check_covers(void) {
+    static const char *const NAMES[] = { "cover.jpg", "Cover.JPG", "folder.jpg", "front.jpg" };
+    reply_t r = { 0 };
+    char sql[512], dir[256], path[320], old[24], c[64];
+    int have = 0, want = 0;
+    CHECK(bytes32(2166136261u, "a", 1) == 0xe40c292cu); /* FNV-1a 32's published vector */
+    CHECK(row_key("play", "0") == 0x879260aau);         /* FNV-1a of "play\t0", by Python */
+    sh("rm -rf " COVER_ROOT " && mkdir -p " COVER_ROOT "/mnt/data " COVER_ROOT
+       "/mnt/mmc/.mixtape " COVER_ROOT "/mnt/mmc/Music " COVER_ROOT "/tmp");
+    sh("ffmpeg -v quiet -f lavfi -i color=c=red:s=320x240 -frames:v 1 -y " COVER_ROOT "/big.jpg");
+    size_t jn = 0;
+    char *jpg = slurp(COVER_ROOT "/big.jpg", &jn);
+    CHECK(jpg && jn);
+    sqlite3 *db;
+    CHECK(!sqlite3_open_v2(COVER_ROOT "/mnt/data/database.db", &db, 6, 0));
+    CHECK(!sqlite3_exec(db,
+                        "create table songtable(id INTEGER PRIMARY KEY, filename, fileurl, album, "
+                        "songer, style, name, composer, albumsonger, year, track, cd_num, time, "
+                        "time_end, time_create);",
+                        0, 0, 0));
+    for (int i = 0; i < 12; ++i) { /* one song an album, each by its own artist */
+        snprintf(dir, sizeof dir, COVER_ROOT "/mnt/mmc/Music/Album %d", i);
+        CHECK(!mkdir(dir, 0755));
+        snprintf(path, sizeof path, "%s/01 Song %d.flac", dir, i);
+        put(path, "", 0);
+        snprintf(path, sizeof path, "%s/%s", dir, NAMES[i % 4]);
+        put(path, jpg, jn);
+        snprintf(sql, sizeof sql,
+                 "insert into songtable(id,fileurl,album,songer,name,time,time_end) values(%d,"
+                 "'/mnt/mmc/Music/Album %d/01 Song %d.flac','Album %d','Artist %d','Song %d',0,0)",
+                 i + 1, i, i, i, i, i);
+        CHECK(!sqlite3_exec(db, sql, 0, 0, 0));
+    }
+    sqlite3_close(db);
+    pid_t pid = app_start(COVER_ROOT, "art playlist pages library\n");
+    ask(COVER_ROOT, &r, "mix\tshuffle");
+    CHECK(!strcmp(r.head[2], "refresh") && !strcmp(r.f[0][2], "Play Mixtape"));
+    want = covers_wait(&r, &have);
+    CHECK(want == r.rows - 3 && have == want && want > 2 && files_in(COVER_ROOT ART_DIR) == want);
+    for (int i = 0; i < r.rows; ++i)
+        if (!strcmp(r.f[i][1], "play") || !strcmp(r.f[i][1], "strike")) {
+            cover_file(r.f[i][1], r.f[i][4], path, sizeof path);
+            CHECK(jpeg_small(path));
+        }
+    /* a re-roll: the new mix's covers, and the old Play row's gone with the old mix */
+    snprintf(old, sizeof old, "%s", r.f[0][4]);
+    snprintf(c, sizeof c, "reroll\t%s", old);
+    ask(COVER_ROOT, &r, c);
+    want = covers_wait(&r, &have);
+    CHECK(want == r.rows - 3 && have == want && files_in(COVER_ROOT ART_DIR) == want);
+    CHECK(strcmp(r.f[0][4], old) && !cover_file("play", old, path, sizeof path));
+    app_end(pid);
+    CHECK(access(COVER_ROOT ART_DIR, 0) && access(COVER_ROOT COVERS_FILE, 0)); /* at quit: gone */
+    free(jpg);
     free(r.buf);
 }
 
@@ -1221,6 +1343,7 @@ int main(int argc, char **argv) {
     web_start();
     check_net();
     check_app();
+    check_covers();
     check_scan();
     printf("check: all passed\n");
     return 0;

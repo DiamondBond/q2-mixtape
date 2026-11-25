@@ -4,6 +4,7 @@
  * an .m3u, Save as Playlist to its Library update. Last.fm and ListenBrainz are asked on a
  * worker thread while the page says so; listening is a child process (scan.c). */
 #include "mixtape.h"
+#include <dirent.h>
 #include <poll.h>
 #include <pthread.h>
 #include <signal.h>
@@ -156,21 +157,45 @@ static int account_set(int lb, const char *name) {
 /* ---- Listening ---------------------------------------------------------------------------- */
 
 static pid_t scanner;
+static pid_t covers_pid;    /* the covers' child (covers_main), 0 when none */
+static int covers_gen = -1; /* the mix whose covers were started, -1 for none */
 static void hold(int on) { put_file(R(STATE), on ? "hold=1\n" : "hold=0\n", 7); }
 static void reap(void) {
     if (scanner > 0 && waitpid(scanner, 0, WNOHANG) == scanner) scanner = 0, hold(0);
+    if (covers_pid > 0 && waitpid(covers_pid, 0, WNOHANG) == covers_pid) covers_pid = 0;
+}
+/* A child ended for good: a TERM, a moment for it to end, then a KILL. */
+static void child_stop(pid_t pid) {
+    kill(pid, SIGTERM);
+    for (int i = 0; i < 40 && waitpid(pid, 0, WNOHANG) != pid; ++i) usleep(50000);
+    if (waitpid(pid, 0, WNOHANG) == 0) kill(pid, SIGKILL), waitpid(pid, 0, 0);
 }
 static void scan_stop(void) {
     if (scanner <= 0) return;
-    kill(scanner, SIGTERM);
-    for (int i = 0; i < 40 && waitpid(scanner, 0, WNOHANG) != scanner; ++i) usleep(50000);
-    if (waitpid(scanner, 0, WNOHANG) == 0) kill(scanner, SIGKILL), waitpid(scanner, 0, 0);
+    child_stop(scanner);
     scanner = 0;
     hold(0);
+}
+/* The covers' child stopped, and the mix's covers marked as not made: the next draw makes them. */
+static void covers_stop(void) {
+    if (covers_pid > 0) child_stop(covers_pid);
+    covers_pid = 0, covers_gen = -1;
+}
+/* The covers gone: the art directory emptied and removed, and the list too. A directory left by a
+ * run that ended in a crash is cleared the same way; keys repeat from one run to the next. */
+static void covers_clear(void) {
+    DIR *d = opendir(R(ART_DIR));
+    char p[PATH_ROOM];
+    for (struct dirent *e; d && (e = readdir(d));)
+        if (e->d_name[0] != '.') snprintf(p, sizeof p, "%s/%s", R(ART_DIR), e->d_name), unlink(p);
+    if (d) closedir(d);
+    rmdir(R(ART_DIR));
+    unlink(R(COVERS_FILE));
 }
 static void scan_start(void) {
     char songs[16];
     if (scanner > 0) return;
+    covers_stop(); /* one child at a time: the covers wait for the scan */
     snprintf(songs, sizeof songs, "%d", lib.n); /* for its count, the database left alone */
     unlink(R(SCAN_FILE));
     pid_t pid = fork();
@@ -234,7 +259,8 @@ static struct {
     unsigned char struck[MX_MAX];
     struct {
         char path[1024], title[128], artist[128];
-        int sec;
+        int sec, seed;  /* seed: of a sound mix's seed album or artist */
+        unsigned album; /* its album's hash: one cover an album */
     } row[MX_MAX];
     char said[120]; /* why there is no mix */
     net_t net;      /* the recommendations it is made from */
@@ -276,6 +302,7 @@ static void rows_fetch(void) {
         else if (access(R(mx.row[i].path), 0))
             mx.row[i].path[0] = 0; /* not on the card: shown, never queued */
         mx.row[i].sec = s->sec;
+        mx.row[i].album = s->album, mx.row[i].seed = mx.seeded && s->seed;
     }
     if (db) db_close(db);
 }
@@ -540,6 +567,59 @@ static void artists_row(rep_t *r) {
     info(r, t, "");
 }
 
+/* ---- Covers ------------------------------------------------------------------------------- */
+
+/* A row's cover key, as the firmware keys it: FNV-1a 32 of its uri, a tab and its context. */
+static unsigned cover_key(const char *uri, const char *ctx) {
+    unsigned h = bytes32(2166136261u, uri, (unsigned)strlen(uri));
+    return bytes32(bytes32(h, "\t", 1), ctx, (unsigned)strlen(ctx));
+}
+
+/* The song the Play row's cover is of: a sound mix's seed on the card, else the first song on the
+ * card. -1 for none. */
+static int cover_pick(void) {
+    int first = -1;
+    for (int i = 0; i < mx.len; ++i) {
+        if (!mx.row[i].path[0]) continue;
+        if (mx.row[i].seed) return i;
+        if (first < 0) first = i;
+    }
+    return first;
+}
+
+/* The mix page's covers, with the firmware's "art" word: a child (covers_main) makes one cover per
+ * album for the Play row and each song row, keyed as they are. Asked at each draw of the page, so
+ * it starts once for each new mix (gen): the last mix's child stops and its covers go first. Not
+ * while the scan runs (scan_start stops the covers, and they start again at the next draw). */
+static void covers_sync(void) {
+    char list[(MX_MAX + 1) * 1048], ctx[32];
+    int n = 0, p;
+    if (!mx.len || covers_gen == mx.gen || scanner > 0 || !has_cap("art")) return;
+    covers_stop();
+    covers_clear();
+    covers_gen = mx.gen;
+    if ((p = cover_pick()) >= 0) {
+        snprintf(ctx, sizeof ctx, "%d", mx.gen);
+        n += snprintf(list + n, sizeof list - n, "%08x %08x %s\n", cover_key("play", ctx),
+                      mx.row[p].album, mx.row[p].path);
+    }
+    for (int i = 0; i < mx.len; ++i) {
+        if (!mx.row[i].path[0]) continue;
+        snprintf(ctx, sizeof ctx, "%d %d", mx.gen, i);
+        n += snprintf(list + n, sizeof list - n, "%08x %08x %s\n", cover_key("strike", ctx),
+                      mx.row[i].album, mx.row[i].path);
+    }
+    if (!n || !put_file(R(COVERS_FILE), list, (size_t)n)) return;
+    mkdir(R(ART_DIR), 0755);
+    pid_t pid = fork();
+    if (!pid) {
+        for (int fd = 3; fd < 1024; ++fd) close(fd); /* the page's connection among them */
+        execl("/proc/self/exe", "q2-mixtape", "covers", (char *)0);
+        _exit(1);
+    }
+    if (pid > 0) covers_pid = pid;
+}
+
 /* The mix's page: Play, its songs (Centre strikes one), Re-roll and Save, then what Last.fm or
  * ListenBrainz recommends that isn't on the card. */
 static void mix_rows(rep_t *r) {
@@ -621,6 +701,7 @@ static void page_mix(rep_t *r, const char *arg) {
         snprintf(r->msg, sizeof r->msg, "refresh");
         return;
     }
+    covers_sync();
     mix_rows(r);
 }
 
@@ -1223,6 +1304,8 @@ int serve(void) {
         }
         if (time(0) - last > idle && scanner <= 0 && !(nw.running && !nw.done)) break;
     }
+    covers_stop();
+    covers_clear();
     scan_stop();
     close(s);
     unlink(addr.sun_path);
