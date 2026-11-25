@@ -15,9 +15,9 @@ Mixtape
 ├── Forgotten Favourites    loved or played a lot, but not lately
 ├── Never Played            songs with no play counted
 ├── Deep Cuts               unplayed songs by the artists you play most
+├── From a Song             Search, then every song: songs that sound like it
 ├── From an Album           Search, then every album: songs that sound like it
 ├── From an Artist          Search, then every artist: songs that sound like theirs
-├── From a Song             Search, then every song: songs that sound like it
 ├── Last.fm                 Username:, then Similar Artists
 ├── ListenBrainz            Username:, then Recommendations
 ├── Listen to Your Music    how many songs are heard; Listen Now
@@ -45,7 +45,7 @@ Last.fm also needs an API key. If this build has none, Mixtape uses the one unde
 
 ## Listen to Your Music
 
-The sound mixes need each song heard once: 30 seconds from its middle, turned into a short profile of its timbre. **Listen to Your Music → Listen Now** does it on the Q2, in the background and at the lowest priority so playback comes first, and keeps the Q2 awake while it works. A big library takes hours: keep the Q2 charging. **Stop Listening** keeps what has been heard. Next time only the songs not heard yet, and songs that changed, are heard. What's heard is used by **From an Album**, **From an Artist**, **From a Song** and **More Like This**, and puts the play-count mixes in sound order.
+The sound mixes need each song heard once: 30 seconds from its middle, turned into a short profile of its timbre. **Listen to Your Music → Listen Now** does it on the Q2, in the background and at the lowest priority so playback comes first, and keeps the Q2 awake while it works. A big library takes hours: keep the Q2 charging. **Stop Listening** keeps what has been heard. Next time only the songs not heard yet, and songs that changed, are heard. What's heard is used by **From a Song**, **From an Album**, **From an Artist** and **More Like This**, and puts the play-count mixes in sound order.
 
 ### Faster, on a computer
 

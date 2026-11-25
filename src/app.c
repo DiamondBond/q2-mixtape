@@ -659,9 +659,9 @@ static void page_menu(rep_t *r) {
         "forgotten");
     row(r, "list", "mix", "Never Played", "Songs with no play counted", "never");
     row(r, "list", "mix", "Deep Cuts", "Unplayed songs by the artists you play most", "deep");
+    row(r, "list", "songs", "From a Song", "Songs that sound like it", "");
     row(r, "list", "albums", "From an Album", "Songs that sound like it", "");
     row(r, "list", "artists", "From an Artist", "Songs that sound like theirs", "");
-    row(r, "list", "songs", "From a Song", "Songs that sound like it", "");
     row(r, "list", "lastfm", "Last.fm", "Its similar artists, from your card", "");
     row(r, "list", "listenbrainz", "ListenBrainz", "Its picks for you, from your card", "");
     row(r, "list", "scan", "Listen to Your Music", sub, "");
@@ -844,7 +844,7 @@ static void page_scan(rep_t *r) {
     for (int i = 0; i < n; ++i) heard += profs_find(&lib.profs, lib.v[i].pkey) != 0; /* or tried */
     snprintf(sub, sizeof sub, "%s of %s", commas(heard, a), commas(n, b));
     info(r, "Songs heard", sub);
-    info(r, "Heard songs make the sound mixes", "From an Album, Artist or Song, More Like This");
+    info(r, "Heard songs make the sound mixes", "From a Song, Album or Artist, More Like This");
     static const char *const ENDS[] = { [END_CARD] = "Stopped: the card went away",
                                         [END_FFMPEG] = "Stopped: this Q2 has no ffmpeg",
                                         [END_LIBRARY] = "Stopped: the Library was updating",

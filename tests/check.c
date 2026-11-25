@@ -712,7 +712,7 @@ static void check_app(void) {
           !strcmp(r.f[0][4], "shuffle") && !strcmp(r.f[11][3], "45 minutes"));
     /* Most Played is a list of songs, not a mix; From a Song opens the song list */
     CHECK(!strcmp(r.f[1][2], "Most Played") && !strcmp(r.f[1][1], "played") && !r.f[1][4][0] &&
-          !strcmp(r.f[7][2], "From a Song") && !strcmp(r.f[7][1], "songs"));
+          !strcmp(r.f[5][2], "From a Song") && !strcmp(r.f[5][1], "songs"));
     ask(ROOT, &r, "nothing");
     CHECK(!strcmp(r.head[1], "unsupported"));
 
