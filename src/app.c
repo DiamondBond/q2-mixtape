@@ -25,7 +25,9 @@
 #define LIBRARY "/tmp/q2-mixtape.library"
 #define QUEUE APP_DIR "/play.m3u"
 #define ACCOUNTS APP_DIR "/accounts"
-#define LENGTH APP_DIR "/length" /* the mixes' length in minutes */
+#define LENGTH APP_DIR "/length"      /* the mixes' length in minutes */
+#define RECENT_FILE APP_DIR "/recent" /* the last mixes made, newest first: a line each */
+#define RECENT_MAX 5
 #define PLAYLISTS CARD "/_explaylist_data"
 #define REPLY_MAX (64 << 10) /* Q2SPOT/1's limits */
 #define REQ_MAX (8 << 10)
@@ -113,6 +115,14 @@ static const char *commas(int n, char *buf) {
     else
         sprintf(buf, "%d", n);
     return buf;
+}
+
+/* How much of s fits in max bytes, cut on a character's boundary. */
+static int cut(const char *s, int max) {
+    int n = (int)strlen(s);
+    if (n <= max) return n;
+    while (max && ((unsigned char)s[max] & 0xc0) == 0x80) --max;
+    return max;
 }
 
 /* ---- Accounts ----------------------------------------------------------------------------- */
@@ -218,6 +228,7 @@ static struct {
     char key[48];   /* the mix op's argument: "deep", "album 1a2b3c4d", "song 812", "lastfm" */
     char name[128]; /* what it is made from: "Deep Cuts", an album's name */
     int kind, gen, libgen, len, seeded, pending;
+    int recent;          /* the Recent Mixes entry it was made from, + 1; 0 for a mix crafted */
     int list[MX_MAX];    /* into lib.v as read at libgen */
     unsigned id[MX_MAX]; /* the songs' ids, which outlast a read */
     unsigned char struck[MX_MAX];
@@ -284,6 +295,15 @@ static int kind_of(const char *arg, unsigned *h) {
     return !strcmp(arg, "listenbrainz") ? MIX_LB : !strcmp(arg, "lastfm") ? MIX_LASTFM : -1;
 }
 
+/* A mix's name as its page and Recent Mixes say it: "<seed> and friends" for a sound mix. */
+static void tape_name(char *o, unsigned size, const char *key, const char *name) {
+    unsigned h = 0;
+    if (kind_of(key, &h) == MIX_SOUND)
+        snprintf(o, size, "%s and friends", name);
+    else
+        snprintf(o, size, "%s", name);
+}
+
 /* The library scored for mx.key's mix, and mx.name and mx.seeded set: 0, with mx.said, when it has
  * nothing to make it from. */
 static int score(void) {
@@ -341,6 +361,89 @@ static int relink(void) {
     return 1;
 }
 
+/* ---- Recent Mixes ------------------------------------------------------------------------- */
+
+typedef struct {
+    char key[48], name[128];
+    long when;
+    int n;
+    unsigned id[MX_MAX];
+} recent_t;
+
+/* The last RECENT_MAX mixes made, newest first, from RECENT_FILE into m: their number. A line is
+ * the key, the time, the song ids and the name, tab-apart. */
+static int recent_read(recent_t *m) {
+    char line[1024];
+    FILE *f = fopen(R(RECENT_FILE), "rb");
+    int n = 0;
+    while (f && n < RECENT_MAX && fgets(line, sizeof line, f)) {
+        recent_t *e = &m[n];
+        unsigned h = 0;
+        int k = 0, j;
+        char *s;
+        if (sscanf(line, "%47[^\t]\t%ld\t%n", e->key, &e->when, &k) != 2) continue;
+        e->n = 0;
+        for (s = line + k; e->n < MX_MAX && *s != '\t' && sscanf(s, "%u%n", &e->id[e->n], &j) == 1;
+             s += j)
+            ++e->n;
+        s = strchr(s, '\t');
+        if (!s || !e->n || kind_of(e->key, &h) < 0) continue;
+        snprintf(e->name, sizeof e->name, "%.*s", (int)strcspn(s + 1, "\n"), s + 1);
+        ++n;
+    }
+    if (f) fclose(f);
+    return n;
+}
+
+/* The mix just made goes first in Recent Mixes, the others kept to RECENT_MAX, written whole. */
+static void recent_add(void) {
+    recent_t m[RECENT_MAX];
+    char text[RECENT_MAX * 560];
+    int old = recent_read(m), n = old < RECENT_MAX ? old + 1 : RECENT_MAX, k = 0;
+    recent_t *e = m;
+    memmove(m + 1, m, (size_t)(n - 1) * sizeof *m);
+    snprintf(e->key, sizeof e->key, "%s", mx.key);
+    snprintf(e->name, sizeof e->name, "%s", mx.name[0] ? mx.name : "Mix");
+    for (char *c = e->name; *c; ++c)
+        *c = (unsigned char)*c < ' ' ? ' ' : *c; /* no tabs or breaks */
+    e->when = (long)time(0), e->n = mx.len;
+    memcpy(e->id, mx.id, sizeof e->id);
+    for (int i = 0; i < n; ++i) {
+        k += snprintf(text + k, sizeof text - (size_t)k, "%s\t%ld\t", m[i].key, m[i].when);
+        for (int j = 0; j < m[i].n; ++j)
+            k += snprintf(text + k, sizeof text - (size_t)k, "%s%u", j ? " " : "", m[i].id[j]);
+        k += snprintf(text + k, sizeof text - (size_t)k, "\t%s\n", m[i].name);
+    }
+    mkdir(R(APP_DIR), 0755);
+    put_file(R(RECENT_FILE), text, (size_t)k);
+}
+
+/* Recent Mixes' entry n made into mx again: the same songs, relinked by id, so nothing is crafted
+ * and nothing recorded. */
+static void recall(int n) {
+    recent_t m[RECENT_MAX];
+    int have = recent_read(m);
+    unsigned h = 0;
+    mx.recent = mx.len = mx.pending = mx.seeded = 0, mx.said[0] = mx.name[0] = 0, ++mx.gen;
+    memset(mx.struck, 0, sizeof mx.struck);
+    if (n < 0 || n >= have)
+        snprintf(mx.said, sizeof mx.said, "That mix has left Recent Mixes");
+    else if (!lib_load(1))
+        snprintf(mx.said, sizeof mx.said, "No Library yet: run Update Library");
+    else {
+        snprintf(mx.key, sizeof mx.key, "%s", m[n].key);
+        mx.kind = kind_of(mx.key, &h), mx.len = m[n].n;
+        memcpy(mx.id, m[n].id, sizeof mx.id);
+        for (int i = 0; i < lib.n; ++i) lib.v[i].flags = 0; /* as a craft starts */
+        if (!relink()) {
+            mx.len = 0;
+            if (!mx.said[0])
+                snprintf(mx.said, sizeof mx.said, "Some of its songs have left the Library");
+        } else
+            rows_fetch(), mx.recent = n + 1;
+    }
+}
+
 /* The mix for arg made anew into mx: Last.fm's and ListenBrainz's asked for first, unless again
  * (a re-roll's), which makes it from what they said last time. */
 static void craft(const char *arg, int again) {
@@ -348,6 +451,7 @@ static void craft(const char *arg, int again) {
     int kind = kind_of(arg, &h), lb = kind == MIX_LB;
     snprintf(mx.key, sizeof mx.key, "%s", arg);
     mx.kind = kind, mx.len = mx.seeded = mx.pending = 0, mx.said[0] = mx.name[0] = 0, ++mx.gen;
+    if (!again) mx.recent = 0; /* a mix crafted is no Recent Mixes entry, a re-roll keeps its */
     memset(mx.struck, 0, sizeof mx.struck);
     if (kind < 0) {
         snprintf(mx.said, sizeof mx.said, "Mixtape doesn't know this mix");
@@ -403,6 +507,37 @@ static void craft(const char *arg, int again) {
                                     : "None of those artists are on your card");
     }
     rows_fetch();
+    if (mx.len && !again) recent_add(); /* made: a re-roll is not */
+}
+
+/* The artists of the songs kept (not struck, on the card), most songs first, as an info row: three
+ * named, the list cut to fit, then " and N more". */
+static void artists_row(rep_t *r) {
+    const char *name[MX_MAX];
+    int songs[MX_MAX], na = 0, k = 0;
+    char list[400] = "", t[240];
+    for (int i = 0; i < mx.len; ++i) {
+        int j = 0;
+        if (mx.struck[i] || !mx.row[i].path[0] || !mx.row[i].artist[0]) continue;
+        while (j < na && strcmp(name[j], mx.row[i].artist)) ++j;
+        if (j == na) name[na] = mx.row[i].artist, songs[na++] = 0;
+        ++songs[j];
+    }
+    for (int pick = 0; pick < na && pick < 3; ++pick) {
+        int best = -1;
+        for (int j = 0; j < na; ++j)
+            if (songs[j] >= 0 && (best < 0 || songs[j] > songs[best])) best = j;
+        songs[best] = -1;
+        k += snprintf(list + k, sizeof list - (size_t)k, "%s%s",
+                      k ? (pick == na - 1 ? " and " : ", ") : "", name[best]);
+    }
+    if (!na) return;
+    int m = cut(list, 48);
+    if (na > 3)
+        snprintf(t, sizeof t, "%.*s and %d more", m, list, na - 3);
+    else
+        snprintf(t, sizeof t, "%.*s", m, list);
+    info(r, t, "");
 }
 
 /* The mix's page: Play, its songs (Centre strikes one), Re-roll and Save, then what Last.fm or
@@ -417,12 +552,12 @@ static void mix_rows(rep_t *r) {
         else if (mx.row[i].path[0])
             ++kept, total += MX_SECS(mx.row[i].sec);
     if (mx.len) {
-        int k = mx.kind == MIX_SOUND ? snprintf(sub, sizeof sub, "%s%s \xc2\xb7 ",
-                                                mx.seeded ? "From " : "Like ", mx.name)
-                                     : 0;
-        snprintf(sub + k, sizeof sub - (size_t)k, "%d song%s \xc2\xb7 %d min", kept,
-                 kept == 1 ? "" : "s", (total + 30) / 60);
+        char name[160];
+        tape_name(name, sizeof name, mx.key, mx.name);
+        snprintf(sub, sizeof sub, "Side A \xc2\xb7 %s \xc2\xb7 %d song%s \xc2\xb7 %d min", name,
+                 kept, kept == 1 ? "" : "s", (total + 30) / 60);
         row(r, "action", "play", "Play Mixtape", sub, ctx);
+        artists_row(r);
     } else
         info(r, mx.said, "");
     for (int i = 0; i < mx.len; ++i) {
@@ -470,9 +605,15 @@ static void mix_rows(rep_t *r) {
     if (mx.len) snprintf(r->msg, sizeof r->msg, "refresh"); /* a strike's mark moves at once */
 }
 
-/* A mix that couldn't be made (no link yet, a library update) is tried again at each open. */
+/* A mix that couldn't be made (no link yet, a library update) is tried again at each open. A
+ * Recent Mixes entry ("recent N") is made again, not crafted: its page's refreshes keep it. */
 static void page_mix(rep_t *r, const char *arg) {
-    if (strcmp(mx.key, arg) || (mx.pending && nw.done) || (!mx.len && !mx.pending)) craft(arg, 0);
+    int n = !strncmp(arg, "recent ", 7) ? atoi(arg + 7) : -1;
+    if (n >= 0) {
+        if (mx.recent != n + 1) recall(n);
+    } else if (mx.recent || strcmp(mx.key, arg) || (mx.pending && nw.done) ||
+               (!mx.len && !mx.pending))
+        craft(arg, 0);
     if (mx.pending) {
         info(r,
              mx.kind == MIX_LB ? "Asking ListenBrainz\xe2\x80\xa6" : "Asking Last.fm\xe2\x80\xa6",
@@ -485,14 +626,6 @@ static void page_mix(rep_t *r, const char *arg) {
 
 /* An action's mix: ctx's gen is the mix's own. */
 static int ours(const char *ctx) { return atoi(ctx) == mx.gen && mx.len && !mx.pending; }
-
-/* How much of s fits in max bytes, cut on a character's boundary. */
-static int cut(const char *s, int max) {
-    int n = (int)strlen(s);
-    if (n <= max) return n;
-    while (max && ((unsigned char)s[max] & 0xc0) == 0x80) --max;
-    return max;
-}
 
 /* A request's stamp for Q2 Pod, new each time: the time and a count. */
 static int stamp(char *o, size_t room) {
@@ -551,6 +684,12 @@ static void act_strike(rep_t *r, const char *ctx) {
 static void act_reroll(rep_t *r, const char *ctx) {
     if (!ours(ctx)) {
         snprintf(r->msg, sizeof r->msg, "This Mixtape has changed");
+        return;
+    }
+    /* ponytail: a recalled Last.fm or ListenBrainz mix keeps no picks to re-roll from; asked again
+     * from its page */
+    if (mx.recent && mx.kind >= MIX_LASTFM) {
+        snprintf(r->msg, sizeof r->msg, "Open it from Online to re-roll it");
         return;
     }
     char key[sizeof mx.key];
@@ -653,20 +792,56 @@ static void page_menu(rep_t *r) {
         snprintf(sub, sizeof sub, "Listening: %s of %s", commas(s.done, a), commas(s.total, b));
     else if (scanning)
         snprintf(sub, sizeof sub, "Checking your songs\xe2\x80\xa6");
+    /* Today's Mix: the day (its number, so it changes at midnight) picks one of the top artists by
+     * plays, and the mix is From an Artist's. Plays as last read, as the list pages have them. */
+    time_t now = time(0);
+    struct tm t = *localtime(&now);
+    unsigned seed =
+        lib_load(0) ? mx_day_artist(lib.v, lib.n, (int)((now + t.tm_gmtoff) / 86400)) : 0;
+    const group_t *g = seed ? group_of(lib.artists, lib.nartists, seed) : 0;
+    if (g) {
+        char day[32], dsub[64], c[24];
+        strftime(day, sizeof day, "Your mix for %A", &t);
+        snprintf(dsub, sizeof dsub, "Like %.*s", cut(lib_str(g->name), 38), lib_str(g->name));
+        snprintf(c, sizeof c, "artist %08x", seed);
+        row(r, "list", "mix", day, dsub, c);
+    }
     row(r, "list", "mix", "Shuffle", "Any songs from your Library", "shuffle");
     row(r, "list", "played", "Most Played", "Your most played songs", "");
     row(r, "list", "mix", "Forgotten Favourites", "Loved or played a lot, but not lately",
         "forgotten");
     row(r, "list", "mix", "Never Played", "Songs with no play counted", "never");
     row(r, "list", "mix", "Deep Cuts", "Unplayed songs by the artists you play most", "deep");
-    row(r, "list", "songs", "From a Song", "Songs that sound like it", "");
-    row(r, "list", "albums", "From an Album", "Songs that sound like it", "");
-    row(r, "list", "artists", "From an Artist", "Songs that sound like theirs", "");
-    row(r, "list", "lastfm", "Last.fm", "Its similar artists, from your card", "");
-    row(r, "list", "listenbrainz", "ListenBrainz", "Its picks for you, from your card", "");
+    row(r, "list", "songs", "From a Song", "Pick a song, hear its neighbours", "");
+    row(r, "list", "albums", "From an Album", "Its sound, its era", "");
+    row(r, "list", "artists", "From an Artist", "Their sound, and those near it", "");
+    row(r, "list", "recent", "Recent Mixes", "Your last five mixes", "");
+    row(r, "list", "online", "Online", "Last.fm and ListenBrainz", "");
     row(r, "list", "scan", "Listen to Your Music", sub, "");
     snprintf(len, sizeof len, "%d minutes", length_min);
     row(r, "list", "lengths", "Mix Length", len, "");
+}
+
+/* Online: Last.fm and ListenBrainz, each a row of its own. */
+static void page_online(rep_t *r) {
+    row(r, "list", "lastfm", "Last.fm", "Its similar artists, from your card", "");
+    row(r, "list", "listenbrainz", "ListenBrainz", "Its picks for you, from your card", "");
+}
+
+/* Recent Mixes: the last five mixes made, newest first; Centre on one opens it again. */
+static void page_recent(rep_t *r) {
+    recent_t m[RECENT_MAX];
+    int n = recent_read(m);
+    if (!n) info(r, "No mixes made yet", "");
+    for (int i = 0; i < n; ++i) {
+        char title[160], sub[64], c[16], day[16];
+        time_t when = (time_t)m[i].when;
+        tape_name(title, sizeof title, m[i].key, m[i].name);
+        strftime(day, sizeof day, "%Y-%m-%d", localtime(&when));
+        snprintf(sub, sizeof sub, "%d song%s \xc2\xb7 %s", m[i].n, m[i].n == 1 ? "" : "s", day);
+        snprintf(c, sizeof c, "recent %d", i);
+        row(r, "list", "mix", title, sub, c);
+    }
 }
 
 /* Mix Length's page: a row a length, the one chosen marked. */
@@ -936,6 +1111,10 @@ static void handle(char **a, int n, rep_t *r) {
         page_lengths(r);
     else if (!strcmp(op, "length"))
         act_length(r, x);
+    else if (!strcmp(op, "online"))
+        page_online(r);
+    else if (!strcmp(op, "recent"))
+        page_recent(r);
     else if (!strcmp(op, "lastfm") || !strcmp(op, "listenbrainz"))
         page_account(r, op[1] == 'i');
     else if (!strcmp(op, "fmuser") || !strcmp(op, "lbuser")) {

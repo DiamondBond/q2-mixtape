@@ -144,6 +144,7 @@ int dur_sec(const char *path);
 int mx_features(const short *pcm, int n, float *out);
 void mx_rank(song_t *v, int n);
 void mx_counts(song_t *v, int n, int kind);
+unsigned mx_day_artist(const song_t *v, int n, int day);
 void mx_items(song_t *v, int n, item_t *items, int ni, int kind);
 int mx_craft(song_t *v, int n, int *list, int seeded, int target);
 void mx_flow(const song_t *v, int n, int *list, int len);

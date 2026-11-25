@@ -8,8 +8,9 @@
 #include <time.h>
 #include <unistd.h>
 
-#define MX_REFS 32 /* a seed's tracks a song is measured against, at most */
-#define RECENT 100 /* Q2 Pod's newest play counts: what was played lately */
+#define MX_REFS 32    /* a seed's tracks a song is measured against, at most */
+#define RECENT 100    /* Q2 Pod's newest play counts: what was played lately */
+#define TOP_ARTISTS 7 /* the day's artist is one of these: a weekday keeps its own */
 
 static unsigned rnd(unsigned n) {
     static unsigned x;
@@ -270,6 +271,7 @@ void mx_flow(const song_t *v, int n, int *list, int len) {
 
 typedef struct {
     unsigned artist, plays;
+    int heard; /* a song of the artist heard (mx_day_artist) */
 } artist_plays;
 static int by_artist(const void *a, const void *b) {
     unsigned x = ((const artist_plays *)a)->artist, y = ((const artist_plays *)b)->artist;
@@ -286,7 +288,7 @@ void mx_counts(song_t *v, int n, int kind) {
     artist_plays *a = kind == MIX_DEEP ? calloc(n + 1, sizeof *a) : 0;
     int na = 0;
     for (int i = 0; a && i < n; ++i)
-        if (v[i].plays && v[i].artist) a[na++] = (artist_plays){ v[i].artist, v[i].plays };
+        if (v[i].plays && v[i].artist) a[na++] = (artist_plays){ v[i].artist, v[i].plays, 0 };
     if (a) qsort(a, (size_t)na, sizeof *a, by_artist);
     int k = 0;
     for (int i = 0; i < na; ++i) /* summed by artist */
@@ -308,7 +310,7 @@ void mx_counts(song_t *v, int n, int kind) {
             s->score = MX_SHORT(s) || s->hearts == 1 ? 0 : 1 + (float)rnd(1 << 16);
             continue;
         } else if (kind == MIX_DEEP && !s->plays && s->artist) {
-            artist_plays key = { s->artist, 0 },
+            artist_plays key = { s->artist, 0, 0 },
                          *f = k ? bsearch(&key, a, (size_t)k, sizeof *a, by_artist) : 0;
             b = f ? (float)log2(1 + f->plays) : 0;
         }
@@ -317,6 +319,38 @@ void mx_counts(song_t *v, int n, int kind) {
                        : b * mx_prefs(s) * (0.6f + 0.8f * (float)rnd(1 << 16) / (1 << 16));
     }
     free(a);
+}
+
+/* The artist of a day's mix: one of the TOP_ARTISTS most played that have a song heard, the day
+ * (its number) picking which. 0 with no play counted, or none of those artists heard.
+ * ponytail: the ranking as it stands, so a play during the day can move the pick. */
+unsigned mx_day_artist(const song_t *v, int n, int day) {
+    artist_plays *a = calloc(n + 1, sizeof *a);
+    unsigned top[TOP_ARTISTS] = { 0 };
+    int na = 0, k = 0, nt = 0;
+    if (!a) return 0;
+    for (int i = 0; i < n; ++i)
+        if (v[i].plays && v[i].artist) a[na++] = (artist_plays){ v[i].artist, v[i].plays, 0 };
+    qsort(a, (size_t)na, sizeof *a, by_artist);
+    for (int i = 0; i < na; ++i) /* summed by artist */
+        if (k && a[k - 1].artist == a[i].artist)
+            a[k - 1].plays += a[i].plays;
+        else
+            a[k++] = a[i];
+    for (int i = 0; i < n; ++i) { /* which of them have a song heard */
+        artist_plays key = { v[i].artist, 0, 0 };
+        artist_plays *f = v[i].prof && k ? bsearch(&key, a, (size_t)k, sizeof *a, by_artist) : 0;
+        if (f) f->heard = 1;
+    }
+    for (; nt < TOP_ARTISTS; ++nt) { /* the most played first, the lower hash on a tie */
+        int best = -1;
+        for (int i = 0; i < k; ++i)
+            if (a[i].heard && (best < 0 || a[i].plays > a[best].plays)) best = i;
+        if (best < 0) break;
+        top[nt] = a[best].artist, a[best].heard = 0;
+    }
+    free(a);
+    return nt ? top[day % nt] : 0;
 }
 
 static int by_title(const void *a, const void *b) {

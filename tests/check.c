@@ -684,6 +684,14 @@ static int find(reply_t *r, const char *title) {
     return -1;
 }
 
+/* A mix page's song titles into out: the rows after Play Mixtape and its artists line, before
+ * Re-roll and Save. Their number. */
+static int mix_titles(const reply_t *r, char (*out)[64]) {
+    int n = 0;
+    for (int i = 2; i < r->rows - 2; ++i) snprintf(out[n++], 64, "%s", r->f[i][2]);
+    return n;
+}
+
 static pid_t app_start(const char *root, const char *caps) {
     char path[256];
     snprintf(path, sizeof path, "%s/tmp/q2-addon.caps", root);
@@ -708,11 +716,35 @@ static void check_app(void) {
     char path[512], c[64];
     pid_t pid = app_start(ROOT, "playlist progress pages library goto field more fav playkept\n");
     ask(ROOT, &r, "menu");
-    CHECK(!strcmp(r.head[1], "ok") && r.rows == 12 && !strcmp(r.f[0][1], "mix") &&
-          !strcmp(r.f[0][4], "shuffle") && !strcmp(r.f[11][3], "45 minutes"));
+    /* Today's Mix leads: the fixture's plays and heard songs make it, From an Artist's mix of one
+     * of the seven artists played most (10 to 16), named for the artist */
+    int today = 0;
+    CHECK(!strcmp(r.head[1], "ok") && r.rows == 13 && !strcmp(r.f[0][1], "mix") &&
+          !strncmp(r.f[0][2], "Your mix for ", 13) && !strncmp(r.f[0][4], "artist ", 7) &&
+          sscanf(r.f[0][3], "Like Artist %d", &today) == 1 && today >= 10 && today <= 16);
+    CHECK(!strcmp(r.f[1][1], "mix") && !strcmp(r.f[1][4], "shuffle") &&
+          !strcmp(r.f[12][3], "45 minutes"));
     /* Most Played is a list of songs, not a mix; From a Song opens the song list */
-    CHECK(!strcmp(r.f[1][2], "Most Played") && !strcmp(r.f[1][1], "played") && !r.f[1][4][0] &&
-          !strcmp(r.f[5][2], "From a Song") && !strcmp(r.f[5][1], "songs"));
+    CHECK(!strcmp(r.f[2][2], "Most Played") && !strcmp(r.f[2][1], "played") && !r.f[2][4][0] &&
+          !strcmp(r.f[6][2], "From a Song") && !strcmp(r.f[6][1], "songs") &&
+          !strcmp(r.f[6][3], "Pick a song, hear its neighbours") &&
+          !strcmp(r.f[7][3], "Its sound, its era") &&
+          !strcmp(r.f[8][3], "Their sound, and those near it"));
+    CHECK(!strcmp(r.f[9][1], "recent") && !strcmp(r.f[9][2], "Recent Mixes") &&
+          !strcmp(r.f[9][3], "Your last five mixes") && !strcmp(r.f[10][1], "online") &&
+          !strcmp(r.f[10][2], "Online") && !strcmp(r.f[10][3], "Last.fm and ListenBrainz") &&
+          !strcmp(r.f[11][2], "Listen to Your Music") && !strcmp(r.f[12][2], "Mix Length"));
+    /* Today's Mix is a mix like any other: its page named for the artist */
+    char want[64];
+    snprintf(want, sizeof want, "Side A \xc2\xb7 Artist %d and friends", today);
+    snprintf(c, sizeof c, "mix\t%s", r.f[0][4]);
+    ask(ROOT, &r, c);
+    CHECK(!strcmp(r.f[0][2], "Play Mixtape") && !strncmp(r.f[0][3], want, strlen(want)));
+    ask(ROOT, &r, "online");
+    CHECK(r.rows == 2 && !strcmp(r.f[0][1], "lastfm") && !strcmp(r.f[0][2], "Last.fm") &&
+          !strcmp(r.f[0][3], "Its similar artists, from your card") &&
+          !strcmp(r.f[1][1], "listenbrainz") && !strcmp(r.f[1][2], "ListenBrainz") &&
+          !strcmp(r.f[1][3], "Its picks for you, from your card"));
     ask(ROOT, &r, "nothing");
     CHECK(!strcmp(r.head[1], "unsupported"));
 
@@ -725,24 +757,27 @@ static void check_app(void) {
     ask(ROOT, &r, "mix\tforgotten");
     printf("app: Forgotten Favourites crafted in %.2f s, the library read included\n", now_s() - t);
     CHECK(!strcmp(r.head[2], "refresh") && !strcmp(r.f[0][2], "Play Mixtape") &&
-          r.rows >= MX_MIN + 3);
+          r.rows >= MX_MIN + 4);
     CHECK(find(&r, "Re-roll") == r.rows - 2 && find(&r, "Save as Playlist") == r.rows - 1);
+    /* the artists line, then the songs */
+    CHECK(strstr(r.f[0][3], "Side A \xc2\xb7 Forgotten Favourites \xc2\xb7 ") &&
+          !strcmp(r.f[1][0], "info") && r.f[1][2][0] && !r.f[1][3][0]);
     char gen[16], first[128], ctx[32];
     snprintf(gen, sizeof gen, "%s", r.f[0][4]);
-    snprintf(first, sizeof first, "%s", r.f[1][2]);
-    snprintf(ctx, sizeof ctx, "%s", r.f[1][4]);
-    CHECK(strstr(r.f[1][3], "Artist ") && strstr(r.f[1][3], ":"));
+    snprintf(first, sizeof first, "%s", r.f[2][2]);
+    snprintf(ctx, sizeof ctx, "%s", r.f[2][4]);
+    CHECK(strstr(r.f[2][3], "Artist ") && strstr(r.f[2][3], ":"));
     ask(ROOT, &r, "mix\tforgotten"); /* the refresh: the same mix */
-    CHECK(!strcmp(r.f[1][2], first) && !strcmp(r.f[0][4], gen));
+    CHECK(!strcmp(r.f[2][2], first) && !strcmp(r.f[0][4], gen));
     snprintf(c, sizeof c, "strike\t%s", ctx);
     ask(ROOT, &r, c);
     CHECK(!strcmp(r.head[1], "ok") && !r.head[2][0]);
     ask(ROOT, &r, "mix\tforgotten");
-    CHECK(!strcmp(r.f[1][3], "Struck \xc2\xb7 Re-roll replaces it") &&
+    CHECK(!strcmp(r.f[2][3], "Struck \xc2\xb7 Re-roll replaces it") &&
           !strcmp(r.f[r.rows - 2][3], "New songs for the struck ones"));
     char kept_titles[MX_MAX][64];
     int nkept = 0;
-    for (int i = 2; i < r.rows - 2; ++i) snprintf(kept_titles[nkept++], 64, "%s", r.f[i][2]);
+    for (int i = 3; i < r.rows - 2; ++i) snprintf(kept_titles[nkept++], 64, "%s", r.f[i][2]);
     /* a heart in stock's database since: the library read again, the mix kept */
     sqlite3 *db;
     CHECK(!sqlite3_open_v2(ROOT "/mnt/data/database.db", &db, 2, 0) &&
@@ -757,7 +792,7 @@ static void check_app(void) {
     for (int i = 0; i < nkept; ++i) CHECK(find(&r, kept_titles[i]) > 0);
     /* one of its songs gone from the library since (its id another): a new mix, every song there */
     int moved;
-    CHECK(sscanf(r.f[2][2], "Song %d", &moved) == 1);
+    CHECK(sscanf(r.f[3][2], "Song %d", &moved) == 1);
     snprintf(c, sizeof c, "update songtable set id=%d where id=%d", 200000 + moved, moved + 1);
     CHECK(!sqlite3_open_v2(ROOT "/mnt/data/database.db", &db, 2, 0) &&
           !sqlite3_exec(db, c, 0, 0, 0));
@@ -783,9 +818,9 @@ static void check_app(void) {
     CHECK(!strcmp(r.head[2], "This Mixtape has changed"));
     ask(ROOT, &r, "mix\tforgotten");
     snprintf(gen, sizeof gen, "%s", r.f[0][4]);
-    int songs = r.rows - 3, gone;
+    int songs = r.rows - 4, gone;
     char gone_path[256], gone_full[320];
-    CHECK(sscanf(r.f[1][2], "Song %d", &gone) == 1); /* its file deleted since: never queued */
+    CHECK(sscanf(r.f[2][2], "Song %d", &gone) == 1); /* its file deleted since: never queued */
     song_path(gone_path, sizeof gone_path, gone);
     snprintf(gone_full, sizeof gone_full, ROOT "%s", gone_path);
     CHECK(!unlink(gone_full));
@@ -805,7 +840,7 @@ static void check_app(void) {
     char kept[32];
     snprintf(kept, sizeof kept, "%d songs \xc2\xb7 ", songs - 1);
     ask(ROOT, &r, "mix\tforgotten");
-    CHECK(!strcmp(r.f[1][3], "Not on the card") && strstr(r.f[0][3], kept));
+    CHECK(!strcmp(r.f[2][3], "Not on the card") && strstr(r.f[0][3], kept));
     int fd = open(gone_full, O_CREAT | O_WRONLY, 0644);
     CHECK(fd >= 0 && !close(fd));
     snprintf(c, sizeof c, "save\t%s", gen);
@@ -849,20 +884,21 @@ static void check_app(void) {
     CHECK(r.rows >= 4 && !strcmp(r.f[0][2], "Artist 1499") && !strcmp(r.f[0][3], "Artist"));
     snprintf(c, sizeof c, "mix\t%s", r.f[1][4]);
     ask(ROOT, &r, c);
-    CHECK(!strncmp(r.f[0][3], "From Album 1499", 15));
+    CHECK(strstr(r.f[0][3], "Album 1499 and friends"));
     ask(ROOT, &r, "search\tArtist 1"); /* 611 artists match, and their albums: 30 rows, half each */
     CHECK(r.rows == 30 && !strcmp(r.f[14][3], "Artist") && strcmp(r.f[15][3], "Artist"));
     ask(ROOT, &r, "search\tsong 77"); /* songs by title: each a row that seeds a mix */
     CHECK(r.rows == 50 && !strcmp(r.f[0][2], "Song 77") && !strncmp(r.f[0][4], "song ", 5));
     snprintf(c, sizeof c, "mix\t%s", r.f[0][4]);
     ask(ROOT, &r, c);
-    CHECK(!strncmp(r.f[0][3], "Like Song 77", 12) && !strcmp(r.f[0][2], "Play Mixtape"));
+    CHECK(strstr(r.f[0][3], "Song 77 and friends") && !strcmp(r.f[0][2], "Play Mixtape"));
     ask(ROOT, &r, "songs"); /* From a Song: Search, then the Library's songs, a window at a time */
     CHECK(!strcmp(r.f[0][0], "search") && r.rows == 50 && !strcmp(r.head[2], "pages") &&
           !strcmp(r.head[3], "49") && !strncmp(r.f[1][4], "song ", 5));
     snprintf(c, sizeof c, "mix\t%s", r.f[1][4]);
     ask(ROOT, &r, c);
-    CHECK(!strncmp(r.f[0][3], "Like Song ", 10) && !strcmp(r.f[0][2], "Play Mixtape"));
+    CHECK(strstr(r.f[0][3], "Side A \xc2\xb7 Song ") && strstr(r.f[0][3], " and friends") &&
+          !strcmp(r.f[0][2], "Play Mixtape"));
     /* Most Played: the counted songs, the most first; rows, not a mix (no strike, Re-roll or Save)
      */
     ask(ROOT, &r, "played");
@@ -883,11 +919,20 @@ static void check_app(void) {
     CHECK(!rename(ROOT "/mnt/data/ringnav-plays", ROOT "/mnt/data/away-plays"));
     ask(ROOT, &r, "played"); /* no play counted: said */
     CHECK(r.rows == 1 && !strcmp(r.f[0][2], "Play some music first") && !r.head[3][0]);
+    ask(ROOT, &r, "menu"); /* and no Today's Mix */
+    CHECK(r.rows == 12 && !strcmp(r.f[0][2], "Shuffle"));
     CHECK(!rename(ROOT "/mnt/data/away-plays", ROOT "/mnt/data/ringnav-plays"));
+    ask(ROOT, &r, "played");
+    /* nothing heard (the profiles away): no Today's Mix either */
+    CHECK(!rename(ROOT PROF_FILE, ROOT "/mnt/data/away-profiles"));
+    ask(ROOT, &r, "played");
+    ask(ROOT, &r, "menu");
+    CHECK(r.rows == 12 && !strcmp(r.f[0][2], "Shuffle"));
+    CHECK(!rename(ROOT "/mnt/data/away-profiles", ROOT PROF_FILE));
     ask(ROOT, &r, "played");
     snprintf(c, sizeof c, "mix\t%s", r.f[0][4]);
     ask(ROOT, &r, c);
-    CHECK(!strncmp(r.f[0][3], "Like Song 100", 13) && find(&r, "Re-roll") >= 0);
+    CHECK(strstr(r.f[0][3], "Song 100 and friends") && find(&r, "Re-roll") >= 0);
     ask(ROOT, &r, "search\tno such thing");
     CHECK(r.rows == 1 && !strcmp(r.f[0][0], "info"));
 
@@ -897,7 +942,31 @@ static void check_app(void) {
           !strcmp(r.f[1][2], "From Album 5") && !strcmp(r.f[2][2], "From Artist 5"));
     snprintf(c, sizeof c, "mix\t%s", r.f[0][4]);
     ask(ROOT, &r, c);
-    CHECK(!strncmp(r.f[0][3], "Like Song 53", 12) && find(&r, "Song 53") < 0);
+    CHECK(strstr(r.f[0][3], "Song 53 and friends") && find(&r, "Song 53") < 0);
+
+    /* Recent Mixes: both mixes made, the newest first; each reopens with its own songs, the same
+     * titles in order, and nothing recorded by a reopen */
+    char nev[MX_MAX][64], dp[MX_MAX][64], bk[MX_MAX][64];
+    int nn, nd, nb;
+    ask(ROOT, &r, "mix\tnever");
+    nn = mix_titles(&r, nev);
+    ask(ROOT, &r, "mix\tdeep");
+    nd = mix_titles(&r, dp);
+    ask(ROOT, &r, "recent");
+    CHECK(r.rows >= 2 && !strcmp(r.f[0][2], "Deep Cuts") && !strcmp(r.f[1][2], "Never Played") &&
+          atoi(r.f[0][3]) == nd && atoi(r.f[1][3]) == nn && !strcmp(r.f[0][4], "recent 0") &&
+          !strcmp(r.f[1][4], "recent 1"));
+    ask(ROOT, &r, "mix\trecent 1");
+    nb = mix_titles(&r, bk);
+    CHECK(nb == nn && !strcmp(r.f[0][2], "Play Mixtape") &&
+          strstr(r.f[0][3], "Side A \xc2\xb7 Never Played \xc2\xb7 "));
+    for (int i = 0; i < nb; ++i) CHECK(!strcmp(bk[i], nev[i]));
+    ask(ROOT, &r, "recent");
+    CHECK(!strcmp(r.f[0][2], "Deep Cuts"));
+    ask(ROOT, &r, "mix\trecent 0");
+    nb = mix_titles(&r, bk);
+    CHECK(nb == nd && strstr(r.f[0][3], "Side A \xc2\xb7 Deep Cuts \xc2\xb7 "));
+    for (int i = 0; i < nb; ++i) CHECK(!strcmp(bk[i], dp[i]));
 
     ask(ROOT, &r, "lastfm");
     CHECK(!strcmp(r.f[0][0], "field") && !strcmp(r.f[0][3], "Not set") &&
@@ -917,13 +986,13 @@ static void check_app(void) {
           !strcmp(r.head[2], "refresh"));
     for (int i = 0; i < 100 && find(&r, "Play Mixtape") < 0; ++i)
         usleep(50000), ask(ROOT, &r, "mix\tlistenbrainz");
-    CHECK(r.rows == 5 && !strcmp(r.f[1][2], "Song 778") && !strcmp(r.f[4][2], "Nowhere") &&
-          !strcmp(r.f[4][3], "Nobody \xc2\xb7 To find"));
+    CHECK(r.rows == 6 && !strcmp(r.f[1][2], "Artist 77") && !strcmp(r.f[2][2], "Song 778") &&
+          !strcmp(r.f[5][2], "Nowhere") && !strcmp(r.f[5][3], "Nobody \xc2\xb7 To find"));
     ask(ROOT, &r, "mix\tlastfm");
     for (int i = 0; i < 100 && r.rows == 1; ++i) usleep(50000), ask(ROOT, &r, "mix\tlastfm");
-    CHECK(find(&r, "Play Mixtape") == 0 && r.rows >= 5 + 1 &&
+    CHECK(find(&r, "Play Mixtape") == 0 && r.rows >= 6 + 1 &&
           !strcmp(r.f[r.rows - 1][2], "Nobody Here"));
-    for (int i = 1; i < r.rows - 3; ++i)
+    for (int i = 2; i < r.rows - 3; ++i)
         CHECK(strstr(r.f[i][3], "Artist 302") || strstr(r.f[i][3], "Artist 303"));
 
     /* Mix Length: kept on the card, and the next mix made to it */
@@ -940,11 +1009,11 @@ static void check_app(void) {
     ask(ROOT, &r, "length\t7"); /* not a length offered */
     ask(ROOT, &r, "mix\tshuffle");
     int min = 0;
-    CHECK(sscanf(strstr(r.f[0][3], "\xc2\xb7 ") + 3, "%d min", &min) == 1 && min >= 17 &&
+    CHECK(sscanf(strstr(r.f[0][3], "songs \xc2\xb7 ") + 9, "%d min", &min) == 1 && min >= 17 &&
           min <= 24);
     char was[MX_MAX][64]; /* Re-roll, nothing struck: a new shuffle */
     int nwas = 0, again = 0;
-    for (int i = 1; i < r.rows - 2; ++i) snprintf(was[nwas++], 64, "%s", r.f[i][2]);
+    for (int i = 2; i < r.rows - 2; ++i) snprintf(was[nwas++], 64, "%s", r.f[i][2]);
     snprintf(c, sizeof c, "reroll\t%s", r.f[0][4]);
     ask(ROOT, &r, c);
     ask(ROOT, &r, "mix\tshuffle");

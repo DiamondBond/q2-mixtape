@@ -10,6 +10,7 @@ Each mix is as long as **Mix Length** says, from 5 minutes to an hour (45 minute
 
 ```
 Mixtape
+├── Your mix for Tuesday    From an Artist, for one of your top artists, each day
 ├── Shuffle                 any songs from your Library
 ├── Most Played             your most played songs, to pick one from
 ├── Forgotten Favourites    loved or played a lot, but not lately
@@ -18,8 +19,10 @@ Mixtape
 ├── From a Song             Search, then every song: songs that sound like it
 ├── From an Album           Search, then every album: songs that sound like it
 ├── From an Artist          Search, then every artist: songs that sound like theirs
-├── Last.fm                 Username:, then Similar Artists
-├── ListenBrainz            Username:, then Recommendations
+├── Recent Mixes            the last five mixes made
+├── Online                  Last.fm and ListenBrainz
+│   ├── Last.fm             Username:, then Similar Artists
+│   └── ListenBrainz        Username:, then Recommendations
 ├── Listen to Your Music    how many songs are heard; Listen Now
 └── Mix Length              5, 10, 15, 20, 30, 45 or 60 minutes
 ```
@@ -30,7 +33,9 @@ Mixtape
 
 While a Mixtape plays, Now Playing's **⋯** has **More Like This**: a mix like the song playing, or like its album or artist.
 
-**Last.fm** looks up your top artists, then artists like them, and makes a mix of their songs on your card, the ones you've played least first. Your own top artists stay out: you know them. **ListenBrainz** asks for the recordings it recommends you and finds them on your card by title and artist. Under the mix, both list what they recommend that isn't on your card, marked **To find**. Enter your username in the **Username:** row; no password is needed. ListenBrainz makes recommendations only for accounts with enough listens, so a new account may have none yet.
+**Your mix for** the day (on the main menu, once songs have play counts and are heard) is a **From an Artist** mix of one of your seven most played artists, the day picking which, so it changes at midnight and each weekday keeps its own. **Recent Mixes** keeps the last five mixes made, newest first; **Centre** on one opens it again with the same songs. A re-roll changes the mix open, not that list.
+
+**Online** holds **Last.fm** and **ListenBrainz**. **Last.fm** looks up your top artists, then artists like them, and makes a mix of their songs on your card, the ones you've played least first. Your own top artists stay out: you know them. **ListenBrainz** asks for the recordings it recommends you and finds them on your card by title and artist. Under the mix, both list what they recommend that isn't on your card, marked **To find**. Enter your username in the **Username:** row; no password is needed. ListenBrainz makes recommendations only for accounts with enough listens, so a new account may have none yet.
 
 Last.fm also needs an API key. If this build has none, Mixtape uses the one under `[LASTFM]` `API_KEY` in your card's `.scrobble.ini` (Q2 Pod's scrobbling settings); with neither, the row says so.
 
@@ -39,13 +44,14 @@ Last.fm also needs an API key. If this build has none, Mixtape uses the one unde
 | Row | Does |
 | --- | --- |
 | Play Mixtape | Plays it from the first song |
+| *Queen, Bowie and 9 more* | Its artists, most songs first: a line, not a row to press |
 | A song | Centre strikes it; again to keep it |
 | Re-roll | New songs for the struck ones; with none struck, new songs for all but the album's or artist's own |
 | Save as Playlist | Adds it to Library → Playlists as "*name* Mixtape *date*", once nothing is playing and you've left the Library |
 
 ## Listen to Your Music
 
-The sound mixes need each song heard once: 30 seconds from its middle, turned into a short profile of its timbre. **Listen to Your Music → Listen Now** does it on the Q2, in the background and at the lowest priority so playback comes first, and keeps the Q2 awake while it works. A big library takes hours: keep the Q2 charging. **Stop Listening** keeps what has been heard. Next time only the songs not heard yet, and songs that changed, are heard. What's heard is used by **From a Song**, **From an Album**, **From an Artist** and **More Like This**, and puts the play-count mixes in sound order.
+The sound mixes need each song heard once: 30 seconds from its middle, turned into a short profile of its timbre. **Listen to Your Music → Listen Now** does it on the Q2, in the background and at the lowest priority so playback comes first, and keeps the Q2 awake while it works. A big library takes hours: keep the Q2 charging. **Stop Listening** keeps what has been heard. Next time only the songs not heard yet, and songs that changed, are heard. What's heard is used by **From a Song**, **From an Album**, **From an Artist**, **Your mix for** and **More Like This**, and puts the play-count mixes in sound order.
 
 ### Faster, on a computer
 
@@ -62,7 +68,7 @@ If your music lives on the computer laid out as on the card, run it on that fold
 
 ## Files
 
-On the card, in `.mixtape/`: `profiles` (what was heard), `accounts` (your usernames), `length` (Mix Length) and `play.m3u` (the mix playing). Updates keep them. Saved mixes go to `_explaylist_data/`, as Q2 Pod's playlists do. Removing the app removes `.mixtape/`, profiles included: keep a copy if you'd rather not hear the library again.
+On the card, in `.mixtape/`: `profiles` (what was heard), `accounts` (your usernames), `length` (Mix Length), `recent` (Recent Mixes) and `play.m3u` (the mix playing). Updates keep them. Saved mixes go to `_explaylist_data/`, as Q2 Pod's playlists do. Removing the app removes `.mixtape/`, profiles included: keep a copy if you'd rather not hear the library again.
 
 ## Building
 
