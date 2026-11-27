@@ -75,7 +75,7 @@ On the card, in `.mixtape/`: `profiles` (what was heard), `accounts` (your usern
 
 ## Building
 
-`make` builds `dist/mixtape.zip` with clang and ld.lld for the Q2 (mipsel, glibc 2.28), from the Q2 sysroot in `~/.cache/q2/sysroot` and the Q2's own libcurl and libsqlite3, which it takes from a Q2 Pod build's `rootfs.squashfs` (`make ROOTFS=…`; needs unsquashfs). `make LASTFM_API_KEY=…` builds a Last.fm key in; never commit one. `make check` runs the checks on the host under ASan and UBSan (needs the sqlite3 and libcurl headers, ffmpeg, Python 3 and numpy): a synthetic 50,000-song library through every mix, the app over its socket, real listening through ffmpeg, Last.fm and ListenBrainz against a local server, and the desktop indexer against the C.
+`make` builds `dist/mixtape.zip` with clang and ld.lld for the Q2 (mipsel, glibc 2.28), from the Q2 sysroot in `~/.cache/q2/sysroot` and the Q2's own libcurl and libsqlite3, which it takes from a Q2 Pod build's `rootfs.squashfs` (`make ROOTFS=…`; needs unsquashfs). `make LASTFM_API_KEY=…` builds a Last.fm key in; never commit one. `python3 tools/icons.py` draws the icons (`icon.png`, `icon-40.png` and Home's `pane.png`; needs Pillow). `make check` runs the checks on the host under ASan and UBSan (needs the sqlite3 and libcurl headers, ffmpeg, Python 3 and numpy): a synthetic 50,000-song library through every mix, the app over its socket, real listening through ffmpeg, Last.fm and ListenBrainz against a local server, and the desktop indexer against the C.
 
 ## Licence
 

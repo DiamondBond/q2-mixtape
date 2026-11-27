@@ -47,8 +47,12 @@ $(DIST)/run: run
 	@mkdir -p $(DIST)
 	cp $< $@
 	chmod 755 $@
-dist/mixtape.zip: $(DIST)/q2-mixtape $(DIST)/q2app $(DIST)/run
-	cd dist && rm -f mixtape.zip && zip -qX mixtape.zip .mixtape/q2app .mixtape/run .mixtape/q2-mixtape
+ART = icon.png icon-40.png pane.png
+$(ART:%=$(DIST)/%): $(DIST)/%: %
+	@mkdir -p $(DIST)
+	cp $< $@
+dist/mixtape.zip: $(DIST)/q2-mixtape $(DIST)/q2app $(DIST)/run $(ART:%=$(DIST)/%)
+	cd dist && rm -f mixtape.zip && zip -qX mixtape.zip .mixtape/q2app .mixtape/run .mixtape/q2-mixtape $(ART:%=.mixtape/%)
 	@ls -l $@
 
 # The host build: the app itself (the checks start it, over its socket and for its scan) and the
